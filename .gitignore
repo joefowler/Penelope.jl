@@ -1,0 +1,9 @@
+deps/*_mod.mod
+deps/*.o
+deps/*.so
+build.log
+/Manifest.toml
+
+# Penelope "leftovers"
+fort.*
+geometry.rep
