@@ -167,6 +167,109 @@ function initialize_track(Eprim::Real, location::Vector, direction::Vector)
     end
 end
 
+"Impose soft energy loss on track given `distance` moved through medium."
+function softEloss(t::Track, distance::Real)
+    particle(t) == Photon && return
+    e = unsafe_load(t.ptr_e0segm)
+    e -= unsafe_load(t.ptr_ssoft)*distance
+    unsafe_store!(t.ptr_e, e)
+end
+
+
+
+function run_sim(Nelec::Integer)
+    Eprim = 15e3
+    init_location = [0.0, 0.0, 1.0]
+    init_direction = [0.0, 0.0, -1.0]
+    eabs = 1000.0 .+ zeros(Float64, 3, 5)  # TODO: read this from penelope_mod
+    penergies = Array{Float64}(undef, 0)
+
+    for n=1:Nelec
+        initialize_track(Eprim, init_location, init_direction)
+        ccall((:locate_, penelope_so), Cvoid, ())
+        mat = material(track)
+
+        # If the particle starts outside all material bodies (as expected), propagate it forward
+        if mat == 0
+            stepdist = 1e20
+            actualdist = Ref{Float64}(0)
+            ncross = Ref{Int32}(0)
+            ccall((:step_, penelope_so), Cvoid, (Ref{Float64}, Ref{Float64}, Ref{Int32}), stepdist, actualdist, ncross)
+            mat = material(track)
+            if mat == 0  # The particle travels 10^20 cm and still doesn't enter the system.
+                continue
+            end
+        end
+
+        # Clean the secondary stack so it can store all children of this primary.
+        ccall((:cleans_, penelope_so), Cvoid, ())
+        while true  # Loop over all particles, first the primary, then any secondaries.
+            ccall((:start_, penelope_so), Cvoid, ())  # Start sim in a new medium
+            part = particle(track)
+            if part == Photon
+                mat = material(track)
+                e = energy(track)
+                emission_spot = location(track)
+                emission_dir = direction(track)
+                z = emission_spot[3]
+                w = emission_dir[3]
+                ilbx = ilb(track)
+                @show e, z, w, ilbx
+            end
+
+            while true  # Loop over all steps taken by this particle
+                maxdist = Ref{Float64}(1e-4)  # TODO: this should depend on material
+                actualdist = Ref{Float64}(0)
+                ccall((:jump_, penelope_so), Cvoid, (Ref{Float64}, Ref{Float64}), maxdist, actualdist)
+                stepdist = Ref{Float64}(actualdist[])
+                ncross = Ref{Int32}(0)
+                ccall((:step_, penelope_so), Cvoid, (Ref{Float64}, Ref{Float64}, Ref{Int32}), stepdist, actualdist, ncross)
+                # ncross[]>0 && @show stepdist[], actualdist[], ncross[]
+                if ncross[] > 0  # Crossed from one material to another.
+                    softEloss(track, actualdist[])
+                    mat = material(track)
+                    part = particle(track)
+                    if mat == 0  # Particle left enclosure
+                        break
+                    end
+                    if energy(track) < eabs[part, mat]
+                        break
+                    end
+                    ccall((:start_, penelope_so), Cvoid, ())  # Start sim in a new medium
+                    continue
+                end
+                de = Ref{Float64}()
+                icol = Ref{Int32}()
+                ccall((:knock_, penelope_so), Cvoid, (Ref{Float64}, Ref{Int32}), de, icol)
+                part = particle(track)
+                mat = material(track)
+                e = energy(track)
+                if e < eabs[part, mat]
+                    break
+                end
+            end
+            # Done tracking 1 particle
+
+            e = energy(track)
+            if part == Photon && e > 0
+                # ilbx = [unsafe_load(ptr_ilb, i) for i=1:4]
+                @show energy, emission_spot, emission_dir
+                push!(penergies, e)
+            end
+
+            nleft = Ref{Int32}()
+            ccall((:secpar_, penelope_so), Cvoid, (Ref{Int32},), nleft)
+            if nleft[] == 0
+                break
+            end
+
+        end
+        # Done tracking all particles from this primary's secondary stack.
+
+    end
+    # Done tracking Nprimaries primary particles.
+
+    penergies
 end
 
 
