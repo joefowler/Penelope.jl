@@ -46,7 +46,6 @@ function __init__()
     track.ptr_ibody = cglobal((:__track_mod_MOD_ibody, penelope_so), Int32)
     track.ptr_mat = cglobal((:__track_mod_MOD_mat, penelope_so), Int32)
     track.ptr_ilb = cglobal((:__track_mod_MOD_ilb, penelope_so), Int32)
-    @show track
     global ptr_e = cglobal((:__track_mod_MOD_e, penelope_so), Float64)
     global ptr_u = cglobal((:__track_mod_MOD_u, penelope_so), Float64)
     global ptr_v = cglobal((:__track_mod_MOD_v, penelope_so), Float64)
