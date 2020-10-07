@@ -16,47 +16,48 @@ mutable struct Track
     ptr_ibody::Ptr{Int32}
     ptr_mat::Ptr{Int32}
     ptr_ilb::Ptr{Int32}
+    ptr_e::Ptr{Float64}
+    ptr_x::Ptr{Float64}
+    ptr_y::Ptr{Float64}
+    ptr_z::Ptr{Float64}
+    ptr_u::Ptr{Float64}
+    ptr_v::Ptr{Float64}
+    ptr_w::Ptr{Float64}
+    ptr_wt::Ptr{Float64}
+    ptr_e0segm::Ptr{Float64}
+    ptr_desoft::Ptr{Float64}
+    ptr_ssoft::Ptr{Float64}
 end
-Track() = Track(0, 0, 0, 0)
+Track() = Track(zeros(Int, 15)...)
 track = Track()
 
-# const ptr_kpar = Ref{Ptr{Int32}}(0)
-# const ptr_e = Ref{Ptr{Float64}}(0)
-ptr_kpar = Ptr{Int32}(0)
-ptr_ibody = Ptr{Int32}(0)
-ptr_mat = Ptr{Int32}(0)
-ptr_ilb = Ptr{Int32}(0)
-ptr_e = Ptr{Float64}(0)
-ptr_x = Ptr{Float64}(0)
-ptr_y = Ptr{Float64}(0)
-ptr_z = Ptr{Float64}(0)
-ptr_u = Ptr{Float64}(0)
-ptr_v = Ptr{Float64}(0)
-ptr_w = Ptr{Float64}(0)
-ptr_wt = Ptr{Float64}(0)
-ptr_e0segm = Ptr{Float64}(0)
-ptr_desoft = Ptr{Float64}(0)
-ptr_ssoft = Ptr{Float64}(0)
+energy(t::Track) = unsafe_load(t.ptr_e)
+weight(t::Track) = unsafe_load(t.ptr_wt)
+location(t::Track) = [unsafe_load(t.ptr_x), unsafe_load(t.ptr_y), unsafe_load(t.ptr_z)]
+direction(t::Track) = [unsafe_load(t.ptr_u), unsafe_load(t.ptr_v), unsafe_load(t.ptr_w)]
+particle(t::Track) = unsafe_load(t.ptr_kpar)
+body(t::Track) = unsafe_load(t.ptr_ibody)
+material(t::Track) = unsafe_load(t.ptr_mat)
+ilb(t::Track) = [unsafe_load(t.ptr_ilb, i) for i=1:5]
+
+
+
 function __init__()
-    global ptr_kpar = cglobal((:__track_mod_MOD_kpar, penelope_so), Int32)
-    global ptr_ibody = cglobal((:__track_mod_MOD_ibody, penelope_so), Int32)
-    global ptr_mat = cglobal((:__track_mod_MOD_mat, penelope_so), Int32)
-    global ptr_ilb = cglobal((:__track_mod_MOD_ilb, penelope_so), Int32)
     track.ptr_kpar = cglobal((:__track_mod_MOD_kpar, penelope_so), Int32)
     track.ptr_ibody = cglobal((:__track_mod_MOD_ibody, penelope_so), Int32)
     track.ptr_mat = cglobal((:__track_mod_MOD_mat, penelope_so), Int32)
     track.ptr_ilb = cglobal((:__track_mod_MOD_ilb, penelope_so), Int32)
-    global ptr_e = cglobal((:__track_mod_MOD_e, penelope_so), Float64)
-    global ptr_u = cglobal((:__track_mod_MOD_u, penelope_so), Float64)
-    global ptr_v = cglobal((:__track_mod_MOD_v, penelope_so), Float64)
-    global ptr_w = cglobal((:__track_mod_MOD_w, penelope_so), Float64)
-    global ptr_x = cglobal((:__track_mod_MOD_x, penelope_so), Float64)
-    global ptr_y = cglobal((:__track_mod_MOD_y, penelope_so), Float64)
-    global ptr_z = cglobal((:__track_mod_MOD_z, penelope_so), Float64)
-    global ptr_wt = cglobal((:__track_mod_MOD_wght, penelope_so), Float64)
-    global ptr_e0segm = cglobal((:__track_mod_MOD_e0segm, penelope_so), Float64)
-    global ptr_desoft = cglobal((:__track_mod_MOD_desoft, penelope_so), Float64)
-    global ptr_ssoft = cglobal((:__track_mod_MOD_ssoft, penelope_so), Float64)
+    track.ptr_e = cglobal((:__track_mod_MOD_e, penelope_so), Float64)
+    track.ptr_u = cglobal((:__track_mod_MOD_u, penelope_so), Float64)
+    track.ptr_v = cglobal((:__track_mod_MOD_v, penelope_so), Float64)
+    track.ptr_w = cglobal((:__track_mod_MOD_w, penelope_so), Float64)
+    track.ptr_x = cglobal((:__track_mod_MOD_x, penelope_so), Float64)
+    track.ptr_y = cglobal((:__track_mod_MOD_y, penelope_so), Float64)
+    track.ptr_z = cglobal((:__track_mod_MOD_z, penelope_so), Float64)
+    track.ptr_wt = cglobal((:__track_mod_MOD_wght, penelope_so), Float64)
+    track.ptr_e0segm = cglobal((:__track_mod_MOD_e0segm, penelope_so), Float64)
+    track.ptr_desoft = cglobal((:__track_mod_MOD_desoft, penelope_so), Float64)
+    track.ptr_ssoft = cglobal((:__track_mod_MOD_ssoft, penelope_so), Float64)
 end
 
 """
@@ -94,6 +95,11 @@ struct SimParams
 end
 SimParams() = SimParams(1000, 1000, 1000, 0.1, 0.1, 1000, 1000)
 
+"""
+    fortranify(p)
+
+Convert `p` (a SimParams object or a vector of them) to the vector of floats that
+Penelope::MINITW requires."""
 function fortranify(p::Vector{SimParams})
     n = length(p)
     v = Array{Float64}(undef, 7n)
@@ -114,7 +120,7 @@ fortranify(p::SimParams) = fortranify([p])
     setup_penelope(seed)
 
 Set up the Penelope program. Initialize random number with `seed`"""
-function setup_penelope(seed::Integer, Emax::Float64, simparams::Vector{SimParams})
+function setup_penelope(seed::Integer, Emax::Real, simparams::Vector{SimParams})
 
     materialsFiles = ["Cu.mat"]
     flatfiles = flattenstrings(materialsFiles, 20)
@@ -122,6 +128,8 @@ function setup_penelope(seed::Integer, Emax::Float64, simparams::Vector{SimParam
     @assert length(simparams) == Nmaterials
 
     seed32 = Int32(seed)
+    Emax = Float64(Emax)
+
     ccall((:rand0_, penelope_so), Cvoid, (Ref{Int32},), seed32)
     ccall((:minitw_, penelope_so), Cvoid, (Ref{Int32}, Ptr{Float64}), Nmaterials, fortranify(simparams))
 
@@ -135,7 +143,7 @@ function setup_penelope(seed::Integer, Emax::Float64, simparams::Vector{SimParam
     ccall((:ginitw_, penelope_so), Cvoid, (Ptr{Float64}, Ref{Int32}, Ref{Int32}, Ref{Int32}), geominput, null, NmaterialsG, Nbodies)
     Nmaterials, Nbodies[]
 end
-setup_penelope(seed::Integer, Emax::Float64, simparams::SimParams) = setup_penelope(seed, Emax, [simparams])
+setup_penelope(seed::Integer, Emax::Real, simparams::SimParams) = setup_penelope(seed, Emax, [simparams])
 
 """
     initialize_track(Eprim::Real, location::Vector, direction::Vector)
@@ -143,21 +151,22 @@ setup_penelope(seed::Integer, Emax::Float64, simparams::SimParams) = setup_penel
 Initialize an electron track with energy `Eprim`, 3d location `location` and direction cosines `direction`.
 """
 function initialize_track(Eprim::Real, location::Vector, direction::Vector)
-    ptr_kpar = cglobal((:__track_mod_MOD_kpar, penelope_so), Int32)
-    unsafe_store!(ptr_kpar, Electron)
-    # unsafe_store!(ptr_e, Eprim)
-    # unsafe_store!(ptr_x, location[1])
-    # unsafe_store!(ptr_y, location[2])
-    # unsafe_store!(ptr_z, location[3])
-    # unsafe_store!(ptr_u, direction[1])
-    # unsafe_store!(ptr_v, direction[2])
-    # unsafe_store!(ptr_w, direction[3])
-    # unsafe_store!(ptr_wt, 1.0)
-    # unsafe_store!(ptr_ibody, 0)
-    # ilb = [1, 0, 0, 0, 0]
-    # for i=1:5
-    #     unsafe_store!(ptr_ilb, ilb[i], i)
-    # end
+    unsafe_store!(track.ptr_kpar, Electron)
+    unsafe_store!(track.ptr_e, Eprim)
+    unsafe_store!(track.ptr_x, location[1])
+    unsafe_store!(track.ptr_y, location[2])
+    unsafe_store!(track.ptr_z, location[3])
+    unsafe_store!(track.ptr_u, direction[1])
+    unsafe_store!(track.ptr_v, direction[2])
+    unsafe_store!(track.ptr_w, direction[3])
+    unsafe_store!(track.ptr_wt, 1.0)
+    unsafe_store!(track.ptr_ibody, 0)
+    ilb = [1, 0, 0, 0, 0]  # signifies a primary particle.
+    for i=1:5
+        unsafe_store!(track.ptr_ilb, ilb[i], i)
+    end
+end
+
 end
 
 
