@@ -3,10 +3,32 @@ module Penelope
 using Printf
 
 const penelope_so="deps/penelope.so"
+const MaxBodies=5000
+# MaxBodies must equal both NBV in PENVARED_mod and NB in module PENGEOM_mod.
+
+# Particle types
 const Electron=1
 const Photon=2
 const Positron=3
+const NParticleTypes=3
 
+# e+/e- interactions
+const Hinge=1
+const HardElastic=2
+const HardInelastic=3
+const Brem=4
+const InnerIon=5
+const Annihilation=6
+# photon interactions
+const Rayleigh=1
+const Compton=2
+const PhotoElecAbs=3
+const PairProduction=4
+# All particle interactions
+const Delta=7
+const AuxInteract=8
+const NInteractionTypes=8
+# TODO: should the above const values be @enums?
 
 greet() = print("Hello World!")
 
@@ -41,6 +63,52 @@ material(t::Track) = unsafe_load(t.ptr_mat)
 ilb(t::Track) = [unsafe_load(t.ptr_ilb, i) for i=1:5]
 
 
+mutable struct VarianceReduction
+    ptr_force::Ptr{Float64}
+    ptr_wforce::Ptr{Float64}
+    ptr_dea::Ptr{Float64}
+    ptr_bremsplit::Ptr{Int32}
+    wtmin::Array{Float64,2}  # WLOW in Fortran
+    wtmax::Array{Float64,2}  # WHIG in Fortran
+    forcing::Array{Bool,2} # LFORCE in Fortran
+end
+VarianceReduction() = VarianceReduction(zeros(Int, 4)..., zeros(Float64, MaxBodies, NParticleTypes),
+    ones(Float64, MaxBodies, NParticleTypes), zeros(Bool, MaxBodies, NParticleTypes))
+varred = VarianceReduction()
+
+"""
+    set_forcing([vr::VarianceReduction], body, particle, interaction,
+    forcefactor, [wtmin, [wtmax]])
+
+Set the forcing factor `forcefactor` for the given `body`, `particle`, and `interaction`.
+Set the window [`wtmin`, `wtmax`] for the particle weights that are subject to forcing.
+If not given, `wtmin`=0 and `wtmax`=1e6.
+"""
+function set_forcing(vr::VarianceReduction, body::Integer, particle::Integer, interaction::Integer,
+    forcefactor::Real, wtmin::Real=0.0, wtmax::Real=1.0e6)
+    if body<1 || body>MaxBodies
+        @error "body=$body, require 1 ≤ body ≤ $MaxBodies"
+    end
+    if particle<1 || particle>NParticleTypes
+        @error "particle=$particle, require 1 ≤ particle ≤ $NParticleTypes"
+    end
+    if interaction<1 || interaction>NInteractionTypes
+        @error "interaction=$interaction, require 1 ≤ interaction ≤ $NInteractionTypes"
+    end
+    if forcefactor<1
+        @error "forcefactor=$forcefactor, require forcefactor ≥ 1"
+    end
+    # TODO: handle negative forcing factors somehow
+
+    vr.wtmin[body, particle] = wtmin
+    vr.wtmax[body, particle] = wtmax
+    vr.forcing[body, particle] = true
+    idx = body + MaxBodies*(particle-1 + NParticleTypes*(interaction-1))
+    unsafe_store!(vr.ptr_force, Float64(forcefactor), idx)
+    nothing
+end
+set_forcing(body::Integer, particle::Integer, interaction::Integer,
+    forcefactor::Real, wtmin::Real=0.0, wtmax::Real=1.0e6)=set_forcing(varred, body, particle, interaction, forcefactor, wtmin, wtmax)
 
 function __init__()
     track.ptr_kpar = cglobal((:__track_mod_MOD_kpar, penelope_so), Int32)
@@ -58,6 +126,11 @@ function __init__()
     track.ptr_e0segm = cglobal((:__track_mod_MOD_e0segm, penelope_so), Float64)
     track.ptr_desoft = cglobal((:__track_mod_MOD_desoft, penelope_so), Float64)
     track.ptr_ssoft = cglobal((:__track_mod_MOD_ssoft, penelope_so), Float64)
+
+    varred.ptr_force = cglobal((:__penvared_mod_MOD_force, penelope_so), Float64)
+    varred.ptr_wforce = cglobal((:__penvared_mod_MOD_wforce, penelope_so), Float64)
+    varred.ptr_dea = cglobal((:__penvared_mod_MOD_dea, penelope_so), Float64)
+    varred.ptr_bremsplit = cglobal((:__penvared_mod_MOD_ibrspl, penelope_so), Int32)
 end
 
 """
@@ -201,7 +274,8 @@ function run_sim(Nelec::Integer)
 
         # Clean the secondary stack so it can store all children of this primary.
         clean_secstack()
-        while true  # Loop over all particles, first the primary, then any secondaries.
+        particles_to_do = 1
+        while particles_to_do > 0  # Loop over all particles, first the primary, then any secondaries.
             start_medium()
             part = particle(track)
             if part == Photon
@@ -216,10 +290,15 @@ function run_sim(Nelec::Integer)
             end
 
             while true  # Loop over all steps taken by this particle
+                ibody = body(track)
+                wt = weight(track)
+                forcing = varred.forcing[ibody, part] && wt > varred.wtmin[ibody, part] &&
+                    wt ≤ varred.wtmax[ibody, part]
+
+                # Compute distance to next interaction (of any type)
                 maxdist = 1e-4  # TODO: this should depend on material
-                interaction_dist = compute_jump_length(maxdist)
+                interaction_dist = compute_jump_length(maxdist, forcing)
                 actualdist, ncross = take_one_step(interaction_dist)
-                # ncross[]>0 && @show stepdist[], actualdist[], ncross[]
                 if ncross[] > 0  # Crossed from one material to another.
                     softEloss(track, actualdist[])
                     mat = material(track)
@@ -233,7 +312,9 @@ function run_sim(Nelec::Integer)
                     start_medium()
                     continue
                 end
-                de, icol = knock()
+
+                # Simulate next interaction
+                de, icol = knock(forcing)
                 part = particle(track)
                 mat = material(track)
                 e = energy(track)
@@ -250,10 +331,7 @@ function run_sim(Nelec::Integer)
                 push!(penergies, e)
             end
 
-            if number_secondaries() == 0
-                break
-            end
-
+            particles_to_do = number_secondaries()
         end
         # Done tracking all particles from this primary's secondary stack.
 
@@ -265,10 +343,14 @@ end
 
 """Simulate an interaction (by wrapping KNOCK). Return (`de`, `icol`)=(deposited energy, kind of event).
 See Penelope Table 7.5 for the `icol` convention."""
-function knock()
+function knock(forcing::Bool)
     de = Ref{Float64}()
     icol = Ref{Int32}()
-    ccall((:knock_, penelope_so), Cvoid, (Ref{Float64}, Ref{Int32}), de, icol)
+    if forcing
+        ccall((:knockf_, penelope_so), Cvoid, (Ref{Float64}, Ref{Int32}), de, icol)
+    else
+        ccall((:knock_, penelope_so), Cvoid, (Ref{Float64}, Ref{Int32}), de, icol)
+    end
     de[], icol[]
 end
 
@@ -280,17 +362,23 @@ function number_secondaries()
 end
 
 """
-    compute_jump_length(maxdist)
+    compute_jump_length(maxdist, forcing)
 
-Compute length of one forward step for the tracked particle, up to a maximum distance of `maxdist`.
+Compute length of one forward step for the tracked particle, up to a maximum distance of `maxdist`,
+with or without interaction forcing according to `forcing` (wrap JUMP and JUMPF).
 Return `actual`, the actual distance traveled.
 
 Contains the interaction physics, but assumes materials of infinite size. Use `take_one_step` to consider
 the geometrical limitations of the PenGeom setup."""
-function compute_jump_length(maxdist::Real)
+function compute_jump_length(maxdist::Real, forcing::Bool)
     actualdist = Ref{Float64}(0)
-    ccall((:jump_, penelope_so), Cvoid, (Ref{Float64}, Ref{Float64}),
-        Float64(maxdist), actualdist)
+    if forcing
+        ccall((:jumpf_, penelope_so), Cvoid, (Ref{Float64}, Ref{Float64}),
+            Float64(maxdist), actualdist)
+    else
+        ccall((:jump_, penelope_so), Cvoid, (Ref{Float64}, Ref{Float64}),
+            Float64(maxdist), actualdist)
+    end
     actualdist[]
 end
 
@@ -298,7 +386,7 @@ end
     take_one_step(maxdist)
 
 Take one forward step for the tracked particle, up to a maximum distance of `maxdist` or until crossing
-an interface from one body to anther. Return (`actual`, `ncross`) where `actual` is the actual distance
+an interface from one body to anther (wrap STEP). Return (`actual`, `ncross`) where `actual` is the actual distance
 and `ncross` is the number of interface crossings (should be 0 or 1).
 
 Contains no interaction physics, but knows the geometrical limitations of the PenGeom setup.
@@ -315,10 +403,10 @@ end
 "Clean the stack of unprocessed secondary particles (wrap CLEANS)."
 clean_secstack() = ccall((:cleans_, penelope_so), Cvoid, ())
 
-"Start sim in a new medium"
+"Start sim in a new medium (wrap START)."
 start_medium() = ccall((:start_, penelope_so), Cvoid, ())
 
-"Determine body and material for a track, in PenGeom"
+"Determine body and material for a track, in PenGeom (wrap LOCATE)."
 locate_track() = ccall((:locate_, penelope_so), Cvoid, ())
 
 end # module
