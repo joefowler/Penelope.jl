@@ -167,7 +167,7 @@ function initialize_track(Eprim::Real, location::Vector, direction::Vector)
     end
 end
 
-"Impose soft energy loss on track given `distance` moved through medium."
+"Impose soft energy loss on electron/positron track `t` given `distance` moved through medium."
 function softEloss(t::Track, distance::Real)
     particle(t) == Photon && return
     e = unsafe_load(t.ptr_e0segm)
@@ -186,15 +186,13 @@ function run_sim(Nelec::Integer)
 
     for n=1:Nelec
         initialize_track(Eprim, init_location, init_direction)
-        ccall((:locate_, penelope_so), Cvoid, ())
+        locate_track()
         mat = material(track)
 
-        # If the particle starts outside all material bodies (as expected), propagate it forward
+        # If the particle starts outside all material bodies (as expected), propagate it forward into one.
         if mat == 0
             stepdist = 1e20
-            actualdist = Ref{Float64}(0)
-            ncross = Ref{Int32}(0)
-            ccall((:step_, penelope_so), Cvoid, (Ref{Float64}, Ref{Float64}, Ref{Int32}), stepdist, actualdist, ncross)
+            take_one_step(stepdist)
             mat = material(track)
             if mat == 0  # The particle travels 10^20 cm and still doesn't enter the system.
                 continue
@@ -202,9 +200,9 @@ function run_sim(Nelec::Integer)
         end
 
         # Clean the secondary stack so it can store all children of this primary.
-        ccall((:cleans_, penelope_so), Cvoid, ())
+        clean_secstack()
         while true  # Loop over all particles, first the primary, then any secondaries.
-            ccall((:start_, penelope_so), Cvoid, ())  # Start sim in a new medium
+            start_medium()
             part = particle(track)
             if part == Photon
                 mat = material(track)
@@ -218,12 +216,9 @@ function run_sim(Nelec::Integer)
             end
 
             while true  # Loop over all steps taken by this particle
-                maxdist = Ref{Float64}(1e-4)  # TODO: this should depend on material
-                actualdist = Ref{Float64}(0)
-                ccall((:jump_, penelope_so), Cvoid, (Ref{Float64}, Ref{Float64}), maxdist, actualdist)
-                stepdist = Ref{Float64}(actualdist[])
-                ncross = Ref{Int32}(0)
-                ccall((:step_, penelope_so), Cvoid, (Ref{Float64}, Ref{Float64}, Ref{Int32}), stepdist, actualdist, ncross)
+                maxdist = 1e-4  # TODO: this should depend on material
+                interaction_dist = compute_jump_length(maxdist)
+                actualdist, ncross = take_one_step(interaction_dist)
                 # ncross[]>0 && @show stepdist[], actualdist[], ncross[]
                 if ncross[] > 0  # Crossed from one material to another.
                     softEloss(track, actualdist[])
@@ -232,15 +227,13 @@ function run_sim(Nelec::Integer)
                     if mat == 0  # Particle left enclosure
                         break
                     end
-                    if energy(track) < eabs[part, mat]
+                    if energy(track) < eabs[part, mat]  # Particle below E threshold was absorbed.
                         break
                     end
-                    ccall((:start_, penelope_so), Cvoid, ())  # Start sim in a new medium
+                    start_medium()
                     continue
                 end
-                de = Ref{Float64}()
-                icol = Ref{Int32}()
-                ccall((:knock_, penelope_so), Cvoid, (Ref{Float64}, Ref{Int32}), de, icol)
+                de, icol = knock()
                 part = particle(track)
                 mat = material(track)
                 e = energy(track)
@@ -257,9 +250,7 @@ function run_sim(Nelec::Integer)
                 push!(penergies, e)
             end
 
-            nleft = Ref{Int32}()
-            ccall((:secpar_, penelope_so), Cvoid, (Ref{Int32},), nleft)
-            if nleft[] == 0
+            if number_secondaries() == 0
                 break
             end
 
@@ -272,5 +263,62 @@ function run_sim(Nelec::Integer)
     penergies
 end
 
+"""Simulate an interaction (by wrapping KNOCK). Return (`de`, `icol`)=(deposited energy, kind of event).
+See Penelope Table 7.5 for the `icol` convention."""
+function knock()
+    de = Ref{Float64}()
+    icol = Ref{Int32}()
+    ccall((:knock_, penelope_so), Cvoid, (Ref{Float64}, Ref{Int32}), de, icol)
+    de[], icol[]
+end
+
+"""Return the number of secondaries remaining on the secondary stack (wrap SECPAR)."""
+function number_secondaries()
+    nleft = Ref{Int32}()
+    ccall((:secpar_, penelope_so), Cvoid, (Ref{Int32},), nleft)
+    nleft[]
+end
+
+"""
+    compute_jump_length(maxdist)
+
+Compute length of one forward step for the tracked particle, up to a maximum distance of `maxdist`.
+Return `actual`, the actual distance traveled.
+
+Contains the interaction physics, but assumes materials of infinite size. Use `take_one_step` to consider
+the geometrical limitations of the PenGeom setup."""
+function compute_jump_length(maxdist::Real)
+    actualdist = Ref{Float64}(0)
+    ccall((:jump_, penelope_so), Cvoid, (Ref{Float64}, Ref{Float64}),
+        Float64(maxdist), actualdist)
+    actualdist[]
+end
+
+"""
+    take_one_step(maxdist)
+
+Take one forward step for the tracked particle, up to a maximum distance of `maxdist` or until crossing
+an interface from one body to anther. Return (`actual`, `ncross`) where `actual` is the actual distance
+and `ncross` is the number of interface crossings (should be 0 or 1).
+
+Contains no interaction physics, but knows the geometrical limitations of the PenGeom setup.
+Use `compute_jump_length` before this to capture the interaction physics."""
+function take_one_step(maxdist::Real)
+    actualdist = Ref{Float64}(0)
+    ncross = Ref{Int32}(0)
+    ccall((:step_, penelope_so), Cvoid, (Ref{Float64}, Ref{Float64}, Ref{Int32}),
+        Float64(maxdist), actualdist, ncross)
+    actualdist[], ncross[]
+end
+
+
+"Clean the stack of unprocessed secondary particles (wrap CLEANS)."
+clean_secstack() = ccall((:cleans_, penelope_so), Cvoid, ())
+
+"Start sim in a new medium"
+start_medium() = ccall((:start_, penelope_so), Cvoid, ())
+
+"Determine body and material for a track, in PenGeom"
+locate_track() = ccall((:locate_, penelope_so), Cvoid, ())
 
 end # module
