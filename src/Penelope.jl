@@ -7,28 +7,33 @@ const MaxBodies=5000
 # MaxBodies must equal both NBV in PENVARED_mod and NB in module PENGEOM_mod.
 
 # Particle types
-const Electron=1
-const Photon=2
-const Positron=3
+@enum Particle begin
+    Electron=1
+    Photon=2
+    Positron=3
+end
 const NParticleTypes=3
 
-# e+/e- interactions
-const Hinge=1
-const HardElastic=2
-const HardInelastic=3
-const Brem=4
-const InnerIon=5
-const Annihilation=6
-# photon interactions
-const Rayleigh=1
-const Compton=2
-const PhotoElecAbs=3
-const PairProduction=4
-# All particle interactions
-const Delta=7
-const AuxInteract=8
+@enum Interaction begin
+    # e+/e- interactions
+    Hinge=1
+    HardElastic=2
+    HardInelastic=3
+    Brem=4
+    InnerIon=5
+    Annihilation=6
+    # All particle interactions
+    Delta=7
+    AuxInteract=8
+end
+@enum PhotonInteractions begin
+    # photon interactions
+    Rayleigh=1
+    Compton=2
+    PhotoElecAbs=3
+    PairProduction=4
+end
 const NInteractionTypes=8
-# TODO: should the above const values be @enums?
 
 greet() = print("Hello World!")
 
@@ -57,7 +62,7 @@ energy(t::Track) = unsafe_load(t.ptr_e)
 weight(t::Track) = unsafe_load(t.ptr_wt)
 location(t::Track) = [unsafe_load(t.ptr_x), unsafe_load(t.ptr_y), unsafe_load(t.ptr_z)]
 direction(t::Track) = [unsafe_load(t.ptr_u), unsafe_load(t.ptr_v), unsafe_load(t.ptr_w)]
-particle(t::Track) = unsafe_load(t.ptr_kpar)
+particle(t::Track) = Particle(unsafe_load(t.ptr_kpar))
 body(t::Track) = unsafe_load(t.ptr_ibody)
 material(t::Track) = unsafe_load(t.ptr_mat)
 ilb(t::Track) = [unsafe_load(t.ptr_ilb, i) for i=1:5]
@@ -84,7 +89,7 @@ Set the forcing factor `forcefactor` for the given `body`, `particle`, and `inte
 Set the window [`wtmin`, `wtmax`] for the particle weights that are subject to forcing.
 If not given, `wtmin`=0 and `wtmax`=1e6.
 """
-function set_forcing(vr::VarianceReduction, body::Integer, particle::Integer, interaction::Integer,
+function set_forcing(vr::VarianceReduction, body::Integer, particle::Particle, interaction::Interaction,
     forcefactor::Real, wtmin::Real=0.0, wtmax::Real=1.0e6)
 
     # The forcefactor<0 is a "trick" described in the penelope manual.
@@ -95,24 +100,19 @@ function set_forcing(vr::VarianceReduction, body::Integer, particle::Integer, in
     if body<1 || body>MaxBodies
         @error "body=$body, require 1 ≤ body ≤ $MaxBodies"
     end
-    if particle<1 || particle>NParticleTypes
-        @error "particle=$particle, require 1 ≤ particle ≤ $NParticleTypes"
-    end
-    if interaction<1 || interaction>NInteractionTypes
-        @error "interaction=$interaction, require 1 ≤ interaction ≤ $NInteractionTypes"
-    end
+    ipart = Int(particle)
     if forcefactor<1
         @error "forcefactor=$forcefactor, require forcefactor ≥ 1"
     end
 
-    vr.wtmin[body, particle] = wtmin
-    vr.wtmax[body, particle] = wtmax
-    vr.forcing[body, particle] = true
-    idx = body + MaxBodies*(particle-1 + NParticleTypes*(interaction-1))
+    vr.wtmin[body, ipart] = wtmin
+    vr.wtmax[body, ipart] = wtmax
+    vr.forcing[body, ipart] = true
+    idx = body + MaxBodies*(ipart-1 + NParticleTypes*(Int(interaction)-1))
     unsafe_store!(vr.ptr_force, Float64(forcefactor), idx)
     nothing
 end
-set_forcing(body::Integer, particle::Integer, interaction::Integer,
+set_forcing(body::Integer, particle::Particle, interaction::Interaction,
     forcefactor::Real, wtmin::Real=0.0, wtmax::Real=1.0e6)=set_forcing(varred, body, particle, interaction, forcefactor, wtmin, wtmax)
 
 """
@@ -128,13 +128,13 @@ are subject to forcing. If not given, `wtmin`=0 and `wtmax`=1e6.
 
 This corresponds to a choice of negative forcing factor in Fortran Penelope.
 """
-function set_forcing_per_path(body::Integer, particle::Integer, interaction::Integer,
+function set_forcing_per_path(body::Integer, particle::Particle, interaction::Interaction,
     interactperpath::Real, wtmin::Real=0.0, wtmax::Real=1.0e6)
     @assert interactperpath ≥ 0
     emax = 15e3 # TODO what about emax??
     imat = 1 # TODO find the material number from the body number
     mean_n_interact = ccall((:avncol_, penelope_so), Cdouble, (Ref{Float64}, Ref{Int32}, Ref{Int32}, Ref{Int32}),
-        emax, particle, imat, interaction)
+        emax, Int32(particle), imat, Int32(interaction))
     if mean_n_interact > 1e-8
         forcefactor = interactperpath/mean_n_interact
     else
@@ -258,7 +258,7 @@ setup_penelope(seed::Integer, Emax::Real, MaterialParams::MaterialParams) = setu
 Initialize an electron track with energy `Eprim`, 3d location `location` and direction cosines `direction`.
 """
 function initialize_track(Eprim::Real, location::Vector, direction::Vector)
-    unsafe_store!(track.ptr_kpar, Electron)
+    unsafe_store!(track.ptr_kpar, Int32(Electron))
     unsafe_store!(track.ptr_e, Eprim)
     unsafe_store!(track.ptr_x, location[1])
     unsafe_store!(track.ptr_y, location[2])
@@ -312,6 +312,7 @@ function run_sim(Nelec::Integer)
         while particles_to_do > 0  # Loop over all particles, first the primary, then any secondaries.
             start_medium()
             part = particle(track)
+            ipart = Int(part)
             if part == Photon
                 mat = material(track)
                 e = energy(track)
@@ -326,8 +327,8 @@ function run_sim(Nelec::Integer)
             while true  # Loop over all steps taken by this particle
                 ibody = body(track)
                 wt = weight(track)
-                forcing = varred.forcing[ibody, part] && wt > varred.wtmin[ibody, part] &&
-                    wt ≤ varred.wtmax[ibody, part]
+                forcing = varred.forcing[ibody, ipart] && wt > varred.wtmin[ibody, ipart] &&
+                    wt ≤ varred.wtmax[ibody, ipart]
 
                 # Compute distance to next interaction (of any type)
                 maxdist = 1e-4  # TODO: this should depend on material
@@ -337,10 +338,11 @@ function run_sim(Nelec::Integer)
                     softEloss(track, actualdist[])
                     mat = material(track)
                     part = particle(track)
+                    ipart = Int(part)
                     if mat == 0  # Particle left enclosure
                         break
                     end
-                    if energy(track) < eabs[part, mat]  # Particle below E threshold was absorbed.
+                    if energy(track) < eabs[ipart, mat]  # Particle below E threshold was absorbed.
                         break
                     end
                     start_medium()
@@ -350,9 +352,10 @@ function run_sim(Nelec::Integer)
                 # Simulate next interaction
                 de, icol = knock(forcing)
                 part = particle(track)
+                ipart = Int(part)
                 mat = material(track)
                 e = energy(track)
-                if e < eabs[part, mat]
+                if e < eabs[ipart, mat]
                     break
                 end
             end
@@ -385,7 +388,7 @@ function knock(forcing::Bool)
     else
         ccall((:knock_, penelope_so), Cvoid, (Ref{Float64}, Ref{Int32}), de, icol)
     end
-    de[], icol[]
+    de[], Interaction(icol[])
 end
 
 """Return the number of secondaries remaining on the secondary stack (wrap SECPAR)."""
