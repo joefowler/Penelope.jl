@@ -259,9 +259,10 @@ mutable struct Control
     n_materials::Int
     n_bodies::Int
     body2material::Vector{Int}
-    xrf_split::Int
+    xrf_split::Vector{Int}
+    brem_split::Vector{Int}
     function Control(e, bl, bd, s, m)
-        new(e, bl, bd, s, m, length(m), 0, Int[], 1)
+        new(e, bl, bd, s, m, length(m), 0, Int[], [1], [1])
     end
 end
 default_control(seed) = Control(15e3, [0, 0, 1], [0, 0, -1], Int32(seed), [MaterialParams()])
@@ -305,6 +306,11 @@ function setup_penelope(c::Control)
     @assert nm == c.n_materials
     c.n_bodies = nb
     c.body2material = b2m
+
+    @assert nb == length(c.brem_split)
+    for i=1:nb
+        unsafe_store!(varred.ptr_bremsplit, c.brem_split[i], i)
+    end
     nm, nb, b2m
 end
 
@@ -367,6 +373,14 @@ function run_sim(c::Control, Nelec::Integer)
             start_medium()
             part = particle(track)
             ipart = Int(part)
+
+            # Split fluorescence x rays.
+            ibody = body(track)
+            if part == Photon && c.xrf_split[ibody] > 1
+                split_xrays(c, c.xrf_split[ibody])
+            end
+
+            # Print some info about photons
             if part == Photon
                 mat = material(track)
                 e = energy(track)
@@ -377,7 +391,7 @@ function run_sim(c::Control, Nelec::Integer)
                 w = emission_dir[3]
                 wt = weight(track)
                 ilbx = cause(track)
-                @printf("X %8.2f eV ρ=%5.0f nm z=%5.0f nm cos(z)=%7.4f  wt=%.6f %s\n", e, ρ*1e7, z*1e7, w, wt, ilbx)
+                # @printf("X %8.2f eV ρ=%5.0f nm z=%5.0f nm cos(z)=%7.4f  wt=%.6f %s\n", e, ρ*1e7, z*1e7, w, wt, ilbx)
             end
 
             while true  # Loop over all steps taken by this particle
@@ -417,6 +431,7 @@ function run_sim(c::Control, Nelec::Integer)
             end
             # Done tracking 1 particle
 
+            # Tally facts about that particle
             e = energy(track)
             if part == Photon && e > 0
                 # @show e, emission_spot, emission_dir
@@ -431,6 +446,47 @@ function run_sim(c::Control, Nelec::Integer)
     # Done tracking Nprimaries primary particles.
 
     penergies
+end
+
+"Generate isotropic random direction cosines in 3D just as Penelope does"
+function isotropic_random()
+    # WS=-1.0D0+2.0D0*RAND(10.0D0)
+    # SDTS=SQRT(1.0D0-WS*WS)
+    # DF=TWOPI*RAND(11.0D0)
+    # US=COS(DF)*SDTS
+    # VS=SIN(DF)*SDTS
+    dummy = 10.0
+    r1 = ccall((:rand_, penelope_so), Cdouble, (Ref{Float64}, ), dummy)
+    r2 = ccall((:rand_, penelope_so), Cdouble, (Ref{Float64}, ), dummy)
+    w = 2r1-1.0
+    ϕ = 2π*r2
+    sdts = sqrt(1-w^2)
+    cos(ϕ)*sdts, sin(ϕ)*sdts, w
+end
+
+
+function split_xrays(c::Control, splitfactor::Int)
+    part = particle(track)
+    generation, parent, interaction, xrftype = cause(track)
+    # Particle must be a 2nd generation XRF photon, not the result of splitting
+    if (part == Photon &&
+        splitfactor > 1 &&
+        generation ==2 &&
+        xrftype > 0 &&
+        interaction != XSplit)
+        wt = weight(track)/splitfactor
+        ilbx = ilb(track)
+        ilbx[3] = Int32(Split)
+        unsafe_store!(track.ptr_wt, wt)
+        unsafe_store!(track.ptr_ilb, Int32(Split), 3)
+        x, y, z = location(track)
+        for i=2:splitfactor
+            u, v, w = isotropic_random()
+            ccall((:stores_, penelope_so), Cvoid, (Ref{Float64}, Ref{Float64}, Ref{Float64}, Ref{Float64},
+            Ref{Float64}, Ref{Float64}, Ref{Float64}, Ref{Float64}, Ref{Int32}, Ptr{Int32}, Ref{Int32}),
+            energy(track), x, y, z, u, v, w, wt, Int32(Photon), ilbx, 0)
+        end
+    end
 end
 
 """Simulate an interaction (by wrapping KNOCK). Return (`de`, `icol`)=(deposited energy, kind of event).
@@ -504,12 +560,13 @@ locate_track() = ccall((:locate_, penelope_so), Cvoid, ())
 
 function example(seed::Int)
     c = default_control(seed)
+    c.brem_split[1] = 1
+    c.xrf_split[1] = 4
     setup_penelope(c)
     set_forcing_per_path(1, Electron, Brem, 5, 0.9, 1.0)
     set_forcing_per_path(1, Electron, InnerIon, 50, 0.9, 1.0)
     set_forcing(1, Photon, Compton, 10, 1e-3, 1.0)
     set_forcing(1, Photon, PhotoElecAbs, 10, 1e-3, 1.0)
-    c.xrf_split = 4
     run_sim(c, 50)
     c
 end
