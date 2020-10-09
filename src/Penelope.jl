@@ -2,36 +2,45 @@ module Penelope
 
 using Printf
 
+export Particle,
+    Interaction
+
 const penelope_so="deps/penelope.so"
 const MaxBodies=5000
-# MaxBodies must equal both NBV in PENVARED_mod and NB in module PENGEOM_mod.
+# MaxBodies must equal both NBV in PENVARED_mod and NB in module PENGEOM_mod, or numerous
+# fixed-size arrays in Fortran will be mis-sized in Julia.
 
-# Particle types
+"Particle types"
 @enum Particle begin
+    Invalid=0
     Electron=1
     Photon=2
     Positron=3
 end
 const NParticleTypes=3
 
+"Electron/Positron interaction types"
 @enum Interaction begin
-    # e+/e- interactions
     Hinge=1
     HardElastic=2
     HardInelastic=3
     Brem=4
     InnerIon=5
     Annihilation=6
-    # All particle interactions
     Delta=7
-    AuxInteract=8
+    Aux=8
+    XSplit=9
 end
-@enum PhotonInteractions begin
-    # photon interactions
+
+"Photon interaction types"
+@enum PhotonInteraction begin
     Rayleigh=1
     Compton=2
     PhotoElecAbs=3
     PairProduction=4
+    XDelta=7
+    XAux=8
+    Split=9
 end
 const NInteractionTypes=8
 
@@ -66,6 +75,16 @@ particle(t::Track) = Particle(unsafe_load(t.ptr_kpar))
 body(t::Track) = unsafe_load(t.ptr_ibody)
 material(t::Track) = unsafe_load(t.ptr_mat)
 ilb(t::Track) = [unsafe_load(t.ptr_ilb, i) for i=1:5]
+
+function cause(t::Track)
+    v = [unsafe_load(t.ptr_ilb, i) for i=1:4]
+    part = Particle(v[2])
+    interact = Interaction(v[3])
+    if part==Photon
+        interact = PhotonInteraction(v[3])
+    end
+    v[1], part, interact, v[4]
+end
 
 
 mutable struct VarianceReduction
@@ -113,7 +132,11 @@ function set_forcing(vr::VarianceReduction, body::Integer, particle::Particle, i
     nothing
 end
 set_forcing(body::Integer, particle::Particle, interaction::Interaction,
-    forcefactor::Real, wtmin::Real=0.0, wtmax::Real=1.0e6)=set_forcing(varred, body, particle, interaction, forcefactor, wtmin, wtmax)
+    forcefactor::Real, wtmin::Real=0.0, wtmax::Real=1.0e6)=set_forcing(
+        varred, body, particle, interaction, forcefactor, wtmin, wtmax)
+set_forcing(body::Integer, particle::Particle, interaction::PhotonInteraction,
+    forcefactor::Real, wtmin::Real=0.0, wtmax::Real=1.0e6)=set_forcing(
+        varred, body, particle, Interaction(Int(interaction)), forcefactor, wtmin, wtmax)
 
 """
     set_forcing_per_path(body, particle, interaction,
@@ -143,6 +166,9 @@ function set_forcing_per_path(body::Integer, particle::Particle, interaction::In
     forcefactor = max(forcefactor, 1.0)
     set_forcing(body, particle, interaction, forcefactor, wtmin, wtmax)
 end
+set_forcing_per_path(body::Integer, particle::Particle, interaction::PhotonInteraction,
+    interactperpath::Real, wtmin::Real=0.0, wtmax::Real=1.0e6)=set_forcing_per_path(
+        varred, body, particle, Interaction(Int(interaction)), interactperpath, wtmin, wtmax)
 
 function __init__()
     track.ptr_kpar = cglobal((:__track_mod_MOD_kpar, penelope_so), Int32)
@@ -194,13 +220,14 @@ struct MaterialParams
     C2::Float64
     CutoffHard::Float64
     CutoffBrem::Float64
-    function MaterialParams(a1, a2, a3, c1, c2, wcc, wcr)
+    Filename::String
+    function MaterialParams(a1, a2, a3, c1, c2, wcc, wcr, f)
         c1>0.2 && error("c1 must be ≤ 0.2")
         c2>0.2 && error("c2 must be ≤ 0.2")
-        new(a1, a2, a3, c1, c2, wcc, wcr)
+        new(a1, a2, a3, c1, c2, wcc, wcr, f)
     end
 end
-MaterialParams() = MaterialParams(1000, 1000, 1000, 0.1, 0.1, 1000, 1000)
+MaterialParams() = MaterialParams(1000, 1000, 1000, 0.1, 0.1, 1000, 1000, "Cu.mat")
 
 """
     fortranify(p)
@@ -223,15 +250,32 @@ function fortranify(p::Vector{MaterialParams})
 end
 fortranify(p::MaterialParams) = fortranify([p])
 
+mutable struct Control
+    e_beam::Float64
+    beam_location::Vector{Float64}
+    beam_direction::Vector{Float64}
+    seed::Int32
+    materials::Vector{MaterialParams}
+    n_materials::Int
+    n_bodies::Int
+    body2material::Vector{Int}
+    xrf_split::Int
+    function Control(e, bl, bd, s, m)
+        new(e, bl, bd, s, m, length(m), 0, Int[], 1)
+    end
+end
+default_control(seed) = Control(15e3, [0, 0, 1], [0, 0, -1], Int32(seed), [MaterialParams()])
+
+
 """
     setup_penelope(seed)
 
 Set up the Penelope program. Initialize random number with `seed`"""
 function setup_penelope(seed::Integer, Emax::Real, MaterialParams::Vector{MaterialParams})
 
-    materialsFiles = ["Cu.mat"]
+    materialsFiles = [m.Filename for m in MaterialParams]
+    Nmaterials = length(MaterialParams)
     flatfiles = flattenstrings(materialsFiles, 20)
-    Nmaterials = length(materialsFiles)
     @assert length(MaterialParams) == Nmaterials
 
     seed32 = Int32(seed)
@@ -248,9 +292,21 @@ function setup_penelope(seed::Integer, Emax::Real, MaterialParams::Vector{Materi
     NmaterialsG = Ref{Int32}()
     Nbodies = Ref{Int32}()
     ccall((:ginitw_, penelope_so), Cvoid, (Ptr{Float64}, Ref{Int32}, Ref{Int32}, Ref{Int32}), geominput, null, NmaterialsG, Nbodies)
-    Nmaterials, Nbodies[]
+
+    # Tranlation from body number to material number, at least within PenGeom.
+    ptr = cglobal((:__pengeom_mod_MOD_mater, Penelope.penelope_so), Int32)
+    body2material = [unsafe_load(ptr, i) for i=1:Nbodies[]]
+
+    Nmaterials, Nbodies[], body2material
 end
 setup_penelope(seed::Integer, Emax::Real, MaterialParams::MaterialParams) = setup_penelope(seed, Emax, [MaterialParams])
+function setup_penelope(c::Control)
+    nm, nb, b2m = setup_penelope(c.seed, c.e_beam, c.materials)
+    @assert nm == c.n_materials
+    c.n_bodies = nb
+    c.body2material = b2m
+    nm, nb, b2m
+end
 
 """
     initialize_track(Eprim::Real, location::Vector, direction::Vector)
@@ -273,6 +329,7 @@ function initialize_track(Eprim::Real, location::Vector, direction::Vector)
         unsafe_store!(track.ptr_ilb, ilb[i], i)
     end
 end
+initialize_track(c::Control) = initialize_track(c.e_beam, c.beam_location, c.beam_direction)
 
 "Impose soft energy loss on electron/positron track `t` given `distance` moved through medium."
 function softEloss(t::Track, distance::Real)
@@ -284,15 +341,12 @@ end
 
 
 
-function run_sim(Nelec::Integer)
-    Eprim = 15e3
-    init_location = [0.0, 0.0, 1.0]
-    init_direction = [0.0, 0.0, -1.0]
+function run_sim(c::Control, Nelec::Integer)
     eabs = 1000.0 .+ zeros(Float64, 3, 5)  # TODO: read this from penelope_mod
     penergies = Array{Float64}(undef, 0)
 
     for n=1:Nelec
-        initialize_track(Eprim, init_location, init_direction)
+        initialize_track(c)
         locate_track()
         mat = material(track)
 
@@ -318,10 +372,12 @@ function run_sim(Nelec::Integer)
                 e = energy(track)
                 emission_spot = location(track)
                 emission_dir = direction(track)
+                ρ = sqrt(sum(emission_spot[1:2].^2))
                 z = emission_spot[3]
                 w = emission_dir[3]
-                ilbx = ilb(track)
-                @show e, z, w, ilbx
+                wt = weight(track)
+                ilbx = cause(track)
+                @printf("X %8.2f eV ρ=%5.0f nm z=%5.0f nm cos(z)=%7.4f  wt=%.6f %s\n", e, ρ*1e7, z*1e7, w, wt, ilbx)
             end
 
             while true  # Loop over all steps taken by this particle
@@ -363,8 +419,7 @@ function run_sim(Nelec::Integer)
 
             e = energy(track)
             if part == Photon && e > 0
-                # ilbx = [unsafe_load(ptr_ilb, i) for i=1:4]
-                @show energy, emission_spot, emission_dir
+                # @show e, emission_spot, emission_dir
                 push!(penergies, e)
             end
 
@@ -395,6 +450,7 @@ end
 function number_secondaries()
     nleft = Ref{Int32}()
     ccall((:secpar_, penelope_so), Cvoid, (Ref{Int32},), nleft)
+    # TODO: stop at 6th generation??
     nleft[]
 end
 
@@ -445,5 +501,17 @@ start_medium() = ccall((:start_, penelope_so), Cvoid, ())
 
 "Determine body and material for a track, in PenGeom (wrap LOCATE)."
 locate_track() = ccall((:locate_, penelope_so), Cvoid, ())
+
+function example(seed::Int)
+    c = default_control(seed)
+    setup_penelope(c)
+    set_forcing_per_path(1, Electron, Brem, 5, 0.9, 1.0)
+    set_forcing_per_path(1, Electron, InnerIon, 50, 0.9, 1.0)
+    set_forcing(1, Photon, Compton, 10, 1e-3, 1.0)
+    set_forcing(1, Photon, PhotoElecAbs, 10, 1e-3, 1.0)
+    c.xrf_split = 4
+    run_sim(c, 50)
+    c
+end
 
 end # module
