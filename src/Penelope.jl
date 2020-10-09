@@ -86,6 +86,12 @@ If not given, `wtmin`=0 and `wtmax`=1e6.
 """
 function set_forcing(vr::VarianceReduction, body::Integer, particle::Integer, interaction::Integer,
     forcefactor::Real, wtmin::Real=0.0, wtmax::Real=1.0e6)
+
+    # The forcefactor<0 is a "trick" described in the penelope manual.
+    if forcefactor < 0
+        return set_forcing_per_path(body, particle, interaction, -forcefactor, wtmin, wtmax)
+    end
+
     if body<1 || body>MaxBodies
         @error "body=$body, require 1 ≤ body ≤ $MaxBodies"
     end
@@ -98,7 +104,6 @@ function set_forcing(vr::VarianceReduction, body::Integer, particle::Integer, in
     if forcefactor<1
         @error "forcefactor=$forcefactor, require forcefactor ≥ 1"
     end
-    # TODO: handle negative forcing factors somehow
 
     vr.wtmin[body, particle] = wtmin
     vr.wtmax[body, particle] = wtmax
@@ -109,6 +114,35 @@ function set_forcing(vr::VarianceReduction, body::Integer, particle::Integer, in
 end
 set_forcing(body::Integer, particle::Integer, interaction::Integer,
     forcefactor::Real, wtmin::Real=0.0, wtmax::Real=1.0e6)=set_forcing(varred, body, particle, interaction, forcefactor, wtmin, wtmax)
+
+"""
+    set_forcing_per_path(body, particle, interaction,
+    interactperpath, [wtmin, [wtmax]])
+
+Set the interaction forcing factor to create `interactperpath` interactions on average.
+
+Set the forcing factor for the given `body`, `particle`, and `interaction` such that there are
+`interactperpath` interactions per photon mean free path (for photons) or per mean distance required
+to slow down to rest from Emax. Also set the window [`wtmin`, `wtmax`] for the particle weights that
+are subject to forcing. If not given, `wtmin`=0 and `wtmax`=1e6.
+
+This corresponds to a choice of negative forcing factor in Fortran Penelope.
+"""
+function set_forcing_per_path(body::Integer, particle::Integer, interaction::Integer,
+    interactperpath::Real, wtmin::Real=0.0, wtmax::Real=1.0e6)
+    @assert interactperpath ≥ 0
+    emax = 15e3 # TODO what about emax??
+    imat = 1 # TODO find the material number from the body number
+    mean_n_interact = ccall((:avncol_, penelope_so), Cdouble, (Ref{Float64}, Ref{Int32}, Ref{Int32}, Ref{Int32}),
+        emax, particle, imat, interaction)
+    if mean_n_interact > 1e-8
+        forcefactor = interactperpath/mean_n_interact
+    else
+        forcefactor = interactperpath
+    end
+    forcefactor = max(forcefactor, 1.0)
+    set_forcing(body, particle, interaction, forcefactor, wtmin, wtmax)
+end
 
 function __init__()
     track.ptr_kpar = cglobal((:__track_mod_MOD_kpar, penelope_so), Int32)
@@ -152,7 +186,7 @@ function flattenstrings(s::Vector{T}, strlen::Integer) where {T<:AbstractString}
 end
 
 """Represent key simulation parameters for a material"""
-struct SimParams
+struct MaterialParams
     ElectronAbs::Float64
     PhotonAbs::Float64
     PositronAbs::Float64
@@ -160,20 +194,20 @@ struct SimParams
     C2::Float64
     CutoffHard::Float64
     CutoffBrem::Float64
-    function SimParams(a1, a2, a3, c1, c2, wcc, wcr)
+    function MaterialParams(a1, a2, a3, c1, c2, wcc, wcr)
         c1>0.2 && error("c1 must be ≤ 0.2")
         c2>0.2 && error("c2 must be ≤ 0.2")
         new(a1, a2, a3, c1, c2, wcc, wcr)
     end
 end
-SimParams() = SimParams(1000, 1000, 1000, 0.1, 0.1, 1000, 1000)
+MaterialParams() = MaterialParams(1000, 1000, 1000, 0.1, 0.1, 1000, 1000)
 
 """
     fortranify(p)
 
-Convert `p` (a SimParams object or a vector of them) to the vector of floats that
+Convert `p` (a MaterialParams object or a vector of them) to the vector of floats that
 Penelope::MINITW requires."""
-function fortranify(p::Vector{SimParams})
+function fortranify(p::Vector{MaterialParams})
     n = length(p)
     v = Array{Float64}(undef, 7n)
     for (i, sp)= enumerate(p)
@@ -187,24 +221,24 @@ function fortranify(p::Vector{SimParams})
     end
     v
 end
-fortranify(p::SimParams) = fortranify([p])
+fortranify(p::MaterialParams) = fortranify([p])
 
 """
     setup_penelope(seed)
 
 Set up the Penelope program. Initialize random number with `seed`"""
-function setup_penelope(seed::Integer, Emax::Real, simparams::Vector{SimParams})
+function setup_penelope(seed::Integer, Emax::Real, MaterialParams::Vector{MaterialParams})
 
     materialsFiles = ["Cu.mat"]
     flatfiles = flattenstrings(materialsFiles, 20)
     Nmaterials = length(materialsFiles)
-    @assert length(simparams) == Nmaterials
+    @assert length(MaterialParams) == Nmaterials
 
     seed32 = Int32(seed)
     Emax = Float64(Emax)
 
     ccall((:rand0_, penelope_so), Cvoid, (Ref{Int32},), seed32)
-    ccall((:minitw_, penelope_so), Cvoid, (Ref{Int32}, Ptr{Float64}), Nmaterials, fortranify(simparams))
+    ccall((:minitw_, penelope_so), Cvoid, (Ref{Int32}, Ptr{Float64}), Nmaterials, fortranify(MaterialParams))
 
     infolevel = Int32(3)
     ccall((:pinitw_, penelope_so), Cvoid, (Ref{Float64}, Ref{Int32}, Ref{Int32}, Ptr{UInt8}), Emax, Nmaterials, infolevel, flatfiles)
@@ -216,7 +250,7 @@ function setup_penelope(seed::Integer, Emax::Real, simparams::Vector{SimParams})
     ccall((:ginitw_, penelope_so), Cvoid, (Ptr{Float64}, Ref{Int32}, Ref{Int32}, Ref{Int32}), geominput, null, NmaterialsG, Nbodies)
     Nmaterials, Nbodies[]
 end
-setup_penelope(seed::Integer, Emax::Real, simparams::SimParams) = setup_penelope(seed, Emax, [simparams])
+setup_penelope(seed::Integer, Emax::Real, MaterialParams::MaterialParams) = setup_penelope(seed, Emax, [MaterialParams])
 
 """
     initialize_track(Eprim::Real, location::Vector, direction::Vector)
