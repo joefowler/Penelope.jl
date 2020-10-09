@@ -12,7 +12,7 @@ const MaxBodies=5000
 
 "Particle types"
 @enum Particle begin
-    Invalid=0
+    InvalidPart=0
     Electron=1
     Photon=2
     Positron=3
@@ -21,6 +21,7 @@ const NParticleTypes=3
 
 "Electron/Positron interaction types"
 @enum Interaction begin
+    InvalidInt=0
     Hinge=1
     HardElastic=2
     HardInelastic=3
@@ -346,6 +347,8 @@ function softEloss(t::Track, distance::Real)
 end
 
 
+sumwt = zeros(Float64, 80, 60, 7)
+espect = zeros(Float64, 150, 2)
 
 function run_sim(c::Control, Nelec::Integer)
     eabs = 1000.0 .+ zeros(Float64, 3, 5)  # TODO: read this from penelope_mod
@@ -381,16 +384,16 @@ function run_sim(c::Control, Nelec::Integer)
             end
 
             # Print some info about photons
+            mat = material(track)
+            e = energy(track)
+            emission_spot = location(track)
+            emission_dir = direction(track)
+            ρ = sqrt(sum(emission_spot[1:2].^2))
+            z = emission_spot[3]
+            w = emission_dir[3]
+            wt = weight(track)
+            ilbx = cause(track)
             if part == Photon
-                mat = material(track)
-                e = energy(track)
-                emission_spot = location(track)
-                emission_dir = direction(track)
-                ρ = sqrt(sum(emission_spot[1:2].^2))
-                z = emission_spot[3]
-                w = emission_dir[3]
-                wt = weight(track)
-                ilbx = cause(track)
                 # @printf("X %8.2f eV ρ=%5.0f nm z=%5.0f nm cos(z)=%7.4f  wt=%.6f %s\n", e, ρ*1e7, z*1e7, w, wt, ilbx)
             end
 
@@ -433,9 +436,51 @@ function run_sim(c::Control, Nelec::Integer)
 
             # Tally facts about that particle
             e = energy(track)
-            if part == Photon && e > 0
+            wt = weight(track)
+            if part == Electron && e>0
+                ispect = 1
+                if emission_dir[3]>0; ispect=2; end
+                ebin = round(Int, e/100.0)
+                if ebin≥1 && ebin≤150
+                    espect[ebin, ispect] += wt
+                end
+            end
+            if part == Photon && e > 0 && w<0
                 # @show e, emission_spot, emission_dir
                 push!(penergies, e)
+
+                ρ = sqrt(sum(emission_spot[1:2].^2))
+                z = emission_spot[3]
+                w = emission_dir[3]
+                gen, ppart, icol, xrfcode = cause(track)
+
+                map=0
+                if xrfcode == 29010400 || xrfcode == 29010300
+                    map=1
+                elseif xrfcode ==29010700
+                    map=2
+                elseif xrfcode == 29020700
+                    map=3
+                elseif xrfcode == 0
+                    if e>1000 && e≤4000
+                        map = 4
+                    elseif e>4000 && e≤7000
+                        map = 5
+                    elseif e>7000 && e≤10000
+                        map = 6
+                    elseif e>10000
+                        map=7
+                    end
+                end
+                if map > 0
+                    rbin = round(Int, ρ*1e6)
+                    zbin = round(Int, -z*1e6)
+                    if rbin<1; rbin=1; end
+                    if zbin<1; zbin=1; end
+                    if rbin ≤ 80 && zbin ≤ 60
+                        sumwt[rbin, zbin, map] += wt
+                    end
+                end
             end
 
             particles_to_do = number_secondaries()
@@ -560,7 +605,7 @@ locate_track() = ccall((:locate_, penelope_so), Cvoid, ())
 
 function example(seed::Int)
     c = default_control(seed)
-    c.brem_split[1] = 1
+    c.brem_split[1] = 4
     c.xrf_split[1] = 4
     setup_penelope(c)
     set_forcing_per_path(1, Electron, Brem, 5, 0.9, 1.0)
