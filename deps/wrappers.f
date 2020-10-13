@@ -28,15 +28,16 @@ c  to handle Fortran IO units. Good for Julia to call.
 C  *********************************************************************
 C                       SUBROUTINE GINITW
 C  *********************************************************************
-      SUBROUTINE GINITW(PARINP,NPINP,NMATG,NBOD)
+      SUBROUTINE GINITW(PARINP,NPINP,GEOFIL,NMATG,NBOD)
 c  Wrap the Penelope subroutine GEOMIN so that the caller doesn't need
 c  to handle Fortran IO units. Good for Julia to call.
       USE PENGEOM_mod ! I/O of the geometry subroutines
       IMPLICIT DOUBLE PRECISION (A-H,O-Z), INTEGER*4 (I-N)
+      CHARACTER*20 GEOFIL
       DIMENSION PARINP(20)
 
-      PRINT *, 'Reading geometry...'
-      OPEN(17,FILE='epma1.geo') ! Geometry definition file
+      PRINT *, 'Reading geometry from file ', GEOFIL, '...'
+      OPEN(17,FILE=GEOFIL) ! Geometry definition file
       OPEN(18,FILE='geometry.rep') ! Geometry report filename
       CALL GEOMIN(PARINP,NPINP,NMATG,NBOD,17,18) ! Initialises PENGEOM
       CLOSE(UNIT=17)

@@ -293,7 +293,11 @@ function setup_penelope(seed::Integer, Emax::Real, MaterialParams::Vector{Materi
     null = Ref{Int32}(0)
     NmaterialsG = Ref{Int32}()
     Nbodies = Ref{Int32}()
-    ccall((:ginitw_, penelope_so), Cvoid, (Ptr{Float64}, Ref{Int32}, Ref{Int32}, Ref{Int32}), geominput, null, NmaterialsG, Nbodies)
+    geofile_mod = flattenstrings([geofile], 20)
+    ccall((:ginitw_, penelope_so), Cvoid, (Ptr{Float64}, Ref{Int32}, Ptr{UInt8}, Ref{Int32}, Ref{Int32}),
+        geominput, null, geofile_mod, NmaterialsG, Nbodies)
+    @printf("GINITW called. Returns %d materials and %d bodies\n", NmaterialsG[], Nbodies[])
+    @assert Nmaterials == NmaterialsG[]
 
     # Tranlation from body number to material number, at least within PenGeom.
     ptr = cglobal((:__pengeom_mod_MOD_mater, Penelope.penelope_so), Int32)
