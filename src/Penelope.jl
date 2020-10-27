@@ -1,5 +1,7 @@
 module Penelope
 
+include("hdf5.jl")
+
 using Printf
 
 export Particle,
@@ -66,18 +68,18 @@ mutable struct Track
     ptr_ssoft::Ptr{Float64}
 end
 Track() = Track(zeros(Int, 15)...)
-track = Track()
+gtrack = Track()
 
-energy(t::Track) = unsafe_load(t.ptr_e)
-weight(t::Track) = unsafe_load(t.ptr_wt)
-location(t::Track) = [unsafe_load(t.ptr_x), unsafe_load(t.ptr_y), unsafe_load(t.ptr_z)]
-direction(t::Track) = [unsafe_load(t.ptr_u), unsafe_load(t.ptr_v), unsafe_load(t.ptr_w)]
-particle(t::Track) = Particle(unsafe_load(t.ptr_kpar))
-body(t::Track) = unsafe_load(t.ptr_ibody)
-material(t::Track) = unsafe_load(t.ptr_mat)
-ilb(t::Track) = [unsafe_load(t.ptr_ilb, i) for i=1:5]
+energy(t::Track=gtrack) = unsafe_load(t.ptr_e)
+weight(t::Track=gtrack) = unsafe_load(t.ptr_wt)
+location(t::Track=gtrack) = [unsafe_load(t.ptr_x), unsafe_load(t.ptr_y), unsafe_load(t.ptr_z)]
+direction(t::Track=gtrack) = [unsafe_load(t.ptr_u), unsafe_load(t.ptr_v), unsafe_load(t.ptr_w)]
+particle(t::Track=gtrack) = Particle(unsafe_load(t.ptr_kpar))
+body(t::Track=gtrack) = unsafe_load(t.ptr_ibody)
+material(t::Track=gtrack) = unsafe_load(t.ptr_mat)
+ilb(t::Track=gtrack) = [unsafe_load(t.ptr_ilb, i) for i=1:5]
 
-function cause(t::Track)
+function cause(t::Track=gtrack)
     v = [unsafe_load(t.ptr_ilb, i) for i=1:4]
     part = Particle(v[2])
     interact = Interaction(v[3])
@@ -172,21 +174,21 @@ set_forcing_per_path(body::Integer, particle::Particle, interaction::PhotonInter
         varred, body, particle, Interaction(Int(interaction)), interactperpath, wtmin, wtmax)
 
 function __init__()
-    track.ptr_kpar = cglobal((:__track_mod_MOD_kpar, penelope_so), Int32)
-    track.ptr_ibody = cglobal((:__track_mod_MOD_ibody, penelope_so), Int32)
-    track.ptr_mat = cglobal((:__track_mod_MOD_mat, penelope_so), Int32)
-    track.ptr_ilb = cglobal((:__track_mod_MOD_ilb, penelope_so), Int32)
-    track.ptr_e = cglobal((:__track_mod_MOD_e, penelope_so), Float64)
-    track.ptr_u = cglobal((:__track_mod_MOD_u, penelope_so), Float64)
-    track.ptr_v = cglobal((:__track_mod_MOD_v, penelope_so), Float64)
-    track.ptr_w = cglobal((:__track_mod_MOD_w, penelope_so), Float64)
-    track.ptr_x = cglobal((:__track_mod_MOD_x, penelope_so), Float64)
-    track.ptr_y = cglobal((:__track_mod_MOD_y, penelope_so), Float64)
-    track.ptr_z = cglobal((:__track_mod_MOD_z, penelope_so), Float64)
-    track.ptr_wt = cglobal((:__track_mod_MOD_wght, penelope_so), Float64)
-    track.ptr_e0segm = cglobal((:__track_mod_MOD_e0segm, penelope_so), Float64)
-    track.ptr_desoft = cglobal((:__track_mod_MOD_desoft, penelope_so), Float64)
-    track.ptr_ssoft = cglobal((:__track_mod_MOD_ssoft, penelope_so), Float64)
+    gtrack.ptr_kpar = cglobal((:__track_mod_MOD_kpar, penelope_so), Int32)
+    gtrack.ptr_ibody = cglobal((:__track_mod_MOD_ibody, penelope_so), Int32)
+    gtrack.ptr_mat = cglobal((:__track_mod_MOD_mat, penelope_so), Int32)
+    gtrack.ptr_ilb = cglobal((:__track_mod_MOD_ilb, penelope_so), Int32)
+    gtrack.ptr_e = cglobal((:__track_mod_MOD_e, penelope_so), Float64)
+    gtrack.ptr_u = cglobal((:__track_mod_MOD_u, penelope_so), Float64)
+    gtrack.ptr_v = cglobal((:__track_mod_MOD_v, penelope_so), Float64)
+    gtrack.ptr_w = cglobal((:__track_mod_MOD_w, penelope_so), Float64)
+    gtrack.ptr_x = cglobal((:__track_mod_MOD_x, penelope_so), Float64)
+    gtrack.ptr_y = cglobal((:__track_mod_MOD_y, penelope_so), Float64)
+    gtrack.ptr_z = cglobal((:__track_mod_MOD_z, penelope_so), Float64)
+    gtrack.ptr_wt = cglobal((:__track_mod_MOD_wght, penelope_so), Float64)
+    gtrack.ptr_e0segm = cglobal((:__track_mod_MOD_e0segm, penelope_so), Float64)
+    gtrack.ptr_desoft = cglobal((:__track_mod_MOD_desoft, penelope_so), Float64)
+    gtrack.ptr_ssoft = cglobal((:__track_mod_MOD_ssoft, penelope_so), Float64)
 
     varred.ptr_force = cglobal((:__penvared_mod_MOD_force, penelope_so), Float64)
     varred.ptr_wforce = cglobal((:__penvared_mod_MOD_wforce, penelope_so), Float64)
@@ -230,6 +232,13 @@ struct MaterialParams
 end
 MaterialParams() = MaterialParams(1000, 1000, 1000, 0.1, 0.1, 1000, 1000, "Cu.mat")
 
+function RavenParams()
+    m1 = MaterialParams(1000, 1000, 1000, 0.1, 0.1, 1000, 1000, "Ti.mat")
+    m2 = MaterialParams(1000, 1000, 1000, 0.1, 0.1, 1000, 1000, "SiN.mat")
+    m3 = MaterialParams(1000, 1000, 1000, 0.1, 0.1, 1000, 1000, "SiO2.mat")
+    [m1, m2, m3]
+end
+
 """
     fortranify(p)
 
@@ -256,24 +265,27 @@ mutable struct Control
     beam_location::Vector{Float64}
     beam_direction::Vector{Float64}
     seed::Int32
+    geofile::String
     materials::Vector{MaterialParams}
     n_materials::Int
     n_bodies::Int
     body2material::Vector{Int}
     xrf_split::Vector{Int}
     brem_split::Vector{Int}
-    function Control(e, bl, bd, s, m)
-        new(e, bl, bd, s, m, length(m), 0, Int[], [1], [1])
+    function Control(e, bl, bd, s, gf, m)
+        Nmat = length(m)
+        new(e, bl, bd, s, gf, m, Nmat, 0, Int[], Int[], Int[])
     end
 end
-default_control(seed) = Control(15e3, [0, 0, 1], [0, 0, -1], Int32(seed), [MaterialParams()])
-
+default_control(seed) = Control(15e3, [0, 0, 1], [0, 0, -1], Int32(seed), "epma1.geo", [MaterialParams()])
+raven_control(seed, θ=0.0) = Control(15e3, [-sin(θ), 0, cos(θ)], [sin(θ), 0, -cos(θ)], Int32(seed), "epmaRaven.geo", RavenParams())
 
 """
     setup_penelope(seed)
 
 Set up the Penelope program. Initialize random number with `seed`"""
-function setup_penelope(seed::Integer, Emax::Real, MaterialParams::Vector{MaterialParams})
+function setup_penelope(seed::Integer, Emax::Real, MaterialParams::Vector{MaterialParams}, geofile::AbstractString)
+    reset_counters()
 
     materialsFiles = [m.Filename for m in MaterialParams]
     Nmaterials = length(MaterialParams)
@@ -305,13 +317,19 @@ function setup_penelope(seed::Integer, Emax::Real, MaterialParams::Vector{Materi
 
     Nmaterials, Nbodies[], body2material
 end
-setup_penelope(seed::Integer, Emax::Real, MaterialParams::MaterialParams) = setup_penelope(seed, Emax, [MaterialParams])
+setup_penelope(seed::Integer, Emax::Real, MaterialParams::MaterialParams, geofile::AbstractString) = setup_penelope(seed, Emax, [MaterialParams], geofile)
 function setup_penelope(c::Control)
-    nm, nb, b2m = setup_penelope(c.seed, c.e_beam, c.materials)
+    nm, nb, b2m = setup_penelope(c.seed, c.e_beam, c.materials, c.geofile)
     @assert nm == c.n_materials
     c.n_bodies = nb
     c.body2material = b2m
 
+    if nb > length(c.brem_split)
+        append!(c.brem_split, ones(Int, nb-length(c.brem_split)))
+    end
+    if nb > length(c.xrf_split)
+        append!(c.xrf_split, ones(Int, nb-length(c.xrf_split)))
+    end
     @assert nb == length(c.brem_split)
     for i=1:nb
         unsafe_store!(varred.ptr_bremsplit, c.brem_split[i], i)
@@ -325,25 +343,25 @@ end
 Initialize an electron track with energy `Eprim`, 3d location `location` and direction cosines `direction`.
 """
 function initialize_track(Eprim::Real, location::Vector, direction::Vector)
-    unsafe_store!(track.ptr_kpar, Int32(Electron))
-    unsafe_store!(track.ptr_e, Eprim)
-    unsafe_store!(track.ptr_x, location[1])
-    unsafe_store!(track.ptr_y, location[2])
-    unsafe_store!(track.ptr_z, location[3])
-    unsafe_store!(track.ptr_u, direction[1])
-    unsafe_store!(track.ptr_v, direction[2])
-    unsafe_store!(track.ptr_w, direction[3])
-    unsafe_store!(track.ptr_wt, 1.0)
-    unsafe_store!(track.ptr_ibody, 0)
+    unsafe_store!(gtrack.ptr_kpar, Int32(Electron))
+    unsafe_store!(gtrack.ptr_e, Eprim)
+    unsafe_store!(gtrack.ptr_x, location[1])
+    unsafe_store!(gtrack.ptr_y, location[2])
+    unsafe_store!(gtrack.ptr_z, location[3])
+    unsafe_store!(gtrack.ptr_u, direction[1])
+    unsafe_store!(gtrack.ptr_v, direction[2])
+    unsafe_store!(gtrack.ptr_w, direction[3])
+    unsafe_store!(gtrack.ptr_wt, 1.0)
+    unsafe_store!(gtrack.ptr_ibody, 0)
     ilb = [1, 0, 0, 0, 0]  # signifies a primary particle.
     for i=1:5
-        unsafe_store!(track.ptr_ilb, ilb[i], i)
+        unsafe_store!(gtrack.ptr_ilb, ilb[i], i)
     end
 end
 initialize_track(c::Control) = initialize_track(c.e_beam, c.beam_location, c.beam_direction)
 
 "Impose soft energy loss on electron/positron track `t` given `distance` moved through medium."
-function softEloss(t::Track, distance::Real)
+function softEloss(distance::Real, t::Track=gtrack)
     particle(t) == Photon && return
     e = unsafe_load(t.ptr_e0segm)
     e -= unsafe_load(t.ptr_ssoft)*distance
@@ -351,23 +369,38 @@ function softEloss(t::Track, distance::Real)
 end
 
 
-sumwt = zeros(Float64, 80, 60, 7)
-espect = zeros(Float64, 150, 2)
+sumwtr = zeros(Float64, 140, 100, 3)
+sumwtx = zeros(Float64, 160, 100, 3)
+espect = zeros(Float64, 150, 3)
+xspect = zeros(Float64, 1500, 5)
+totalcounts = 0
+function reset_counters()
+    sumwtr[:,:,:].=0.0
+    sumwtx[:,:,:].=0.0
+    espect[:,:].=0.0
+    xspect[:,:].=0.0
+    global totalcounts = 0
+    nothing
+end
 
 function run_sim(c::Control, Nelec::Integer)
     eabs = 1000.0 .+ zeros(Float64, 3, 5)  # TODO: read this from penelope_mod
     penergies = Array{Float64}(undef, 0)
+    MAXTRACKSTEPS=10000
+    alltracks = Array{Float64}(undef, MAXTRACKSTEPS, 7)
+    trackstep = 1
 
     for n=1:Nelec
+        global totalcounts += 1
         initialize_track(c)
         locate_track()
-        mat = material(track)
+        mat = material()
 
         # If the particle starts outside all material bodies (as expected), propagate it forward into one.
         if mat == 0
             stepdist = 1e20
             take_one_step(stepdist)
-            mat = material(track)
+            mat = material()
             if mat == 0  # The particle travels 10^20 cm and still doesn't enter the system.
                 continue
             end
@@ -378,48 +411,72 @@ function run_sim(c::Control, Nelec::Integer)
         particles_to_do = 1
         while particles_to_do > 0  # Loop over all particles, first the primary, then any secondaries.
             start_medium()
-            part = particle(track)
+            part = particle()
             ipart = Int(part)
 
             # Split fluorescence x rays.
-            ibody = body(track)
+            ibody = body()
             if part == Photon && c.xrf_split[ibody] > 1
                 split_xrays(c, c.xrf_split[ibody])
             end
 
             # Print some info about photons
-            mat = material(track)
-            e = energy(track)
-            emission_spot = location(track)
-            emission_dir = direction(track)
+            mat = material()
+            e = energy()
+            emission_spot = location()
+            emission_dir = direction()
             ρ = sqrt(sum(emission_spot[1:2].^2))
             z = emission_spot[3]
             w = emission_dir[3]
-            wt = weight(track)
-            ilbx = cause(track)
+            wt = weight()
+            ilbx = cause()
             if part == Photon
                 # @printf("X %8.2f eV ρ=%5.0f nm z=%5.0f nm cos(z)=%7.4f  wt=%.6f %s\n", e, ρ*1e7, z*1e7, w, wt, ilbx)
             end
 
             while true  # Loop over all steps taken by this particle
-                ibody = body(track)
-                wt = weight(track)
-                forcing = varred.forcing[ibody, ipart] && wt > varred.wtmin[ibody, ipart] &&
+                startloc = location()
+                ibody = body()
+                wt = weight()
+                forcing = varred.forcing[ibody, ipart] &&
+                    wt > varred.wtmin[ibody, ipart] &&
                     wt ≤ varred.wtmax[ibody, ipart]
 
                 # Compute distance to next interaction (of any type)
                 maxdist = 1e-4  # TODO: this should depend on material
                 interaction_dist = compute_jump_length(maxdist, forcing)
                 actualdist, ncross = take_one_step(interaction_dist)
+                if part == Electron && trackstep < MAXTRACKSTEPS && energy()>4900
+                    endloc = location()
+                    dsq = sum((endloc .- startloc).^2)
+                    if dsq > 1e-8
+                        endloc = startloc + direction() .* 1e-4
+                    end
+                    alltracks[trackstep,1:3] = startloc .* 1e7 # to nm
+                    alltracks[trackstep,4:6] = endloc .* 1e7
+                    alltracks[trackstep,7] = energy()
+                    trackstep += 1
+                end
                 if ncross[] > 0  # Crossed from one material to another.
-                    softEloss(track, actualdist[])
-                    mat = material(track)
-                    part = particle(track)
-                    ipart = Int(part)
+                    softEloss(actualdist[])
+                    mat = material()
+                    # Tally electron spectra
+                    e = energy()
+                    if part == Electron && e>0
+                        # @show e, direction()[3]
+                        ispect = 1
+                        if direction()[3]>0; ispect=2; end
+                        if mat != 0; ispect=3; end
+                        ebin = round(Int, e/100.0)
+                        if ebin≥1 && ebin≤150
+                            espect[ebin, ispect] += weight()
+                        end
+                    end
+
                     if mat == 0  # Particle left enclosure
                         break
                     end
-                    if energy(track) < eabs[ipart, mat]  # Particle below E threshold was absorbed.
+                    if energy() < eabs[ipart, mat]  # Particle below E threshold was absorbed.
                         break
                     end
                     start_medium()
@@ -428,10 +485,10 @@ function run_sim(c::Control, Nelec::Integer)
 
                 # Simulate next interaction
                 de, icol = knock(forcing)
-                part = particle(track)
+                part = particle()
                 ipart = Int(part)
-                mat = material(track)
-                e = energy(track)
+                mat = material()
+                e = energy()
                 if e < eabs[ipart, mat]
                     break
                 end
@@ -439,16 +496,6 @@ function run_sim(c::Control, Nelec::Integer)
             # Done tracking 1 particle
 
             # Tally facts about that particle
-            e = energy(track)
-            wt = weight(track)
-            if part == Electron && e>0
-                ispect = 1
-                if emission_dir[3]>0; ispect=2; end
-                ebin = round(Int, e/100.0)
-                if ebin≥1 && ebin≤150
-                    espect[ebin, ispect] += wt
-                end
-            end
             if part == Photon && e > 0 && w<0
                 # @show e, emission_spot, emission_dir
                 push!(penergies, e)
@@ -456,33 +503,42 @@ function run_sim(c::Control, Nelec::Integer)
                 ρ = sqrt(sum(emission_spot[1:2].^2))
                 z = emission_spot[3]
                 w = emission_dir[3]
-                gen, ppart, icol, xrfcode = cause(track)
+                gen, ppart, icol, xrfcode = cause()
 
                 map=0
-                if xrfcode == 29010400 || xrfcode == 29010300
+                if div(xrfcode, 1000000) == 22
                     map=1
-                elseif xrfcode ==29010700
+                elseif e≤4000
                     map=2
-                elseif xrfcode == 29020700
+                elseif e>4000
                     map=3
-                elseif xrfcode == 0
-                    if e>1000 && e≤4000
-                        map = 4
-                    elseif e>4000 && e≤7000
-                        map = 5
-                    elseif e>7000 && e≤10000
-                        map = 6
-                    elseif e>10000
-                        map=7
-                    end
                 end
                 if map > 0
-                    rbin = round(Int, ρ*1e6)
-                    zbin = round(Int, -z*1e6)
+                    rbin = ceil(Int, ρ*2e6)
+                    zbin = ceil(Int, -z*2e6)
                     if rbin<1; rbin=1; end
                     if zbin<1; zbin=1; end
-                    if rbin ≤ 80 && zbin ≤ 60
-                        sumwt[rbin, zbin, map] += wt
+                    if rbin ≤ 140 && zbin ≤ 100
+                        sumwtr[rbin, zbin, map] += wt
+                    end
+                    xbin = round(Int, emission_spot[1]*2e6+80.5)
+                    if xbin ≥ 1 && xbin ≤ 160 && zbin ≤ 100
+                        sumwtx[xbin, zbin, map] += wt
+                    end
+                end
+                ebin = round(Int, e/10.0)
+                if w<0 && ebin≥1 && ebin≤1500
+                    if xrfcode == 0
+                        xspect[ebin, 1] += wt
+                        if z > -70e-7
+                            xspect[ebin, 3] += wt
+                        elseif z > -2070e-7
+                            xspect[ebin, 4] += wt
+                        else
+                            xspect[ebin, 5] += wt
+                        end
+                    else
+                        xspect[ebin, 2] += wt
                     end
                 end
             end
@@ -494,7 +550,7 @@ function run_sim(c::Control, Nelec::Integer)
     end
     # Done tracking Nprimaries primary particles.
 
-    penergies
+    alltracks[1:trackstep,:]
 end
 
 "Generate isotropic random direction cosines in 3D just as Penelope does"
@@ -507,33 +563,33 @@ function isotropic_random()
     dummy = 10.0
     r1 = ccall((:rand_, penelope_so), Cdouble, (Ref{Float64}, ), dummy)
     r2 = ccall((:rand_, penelope_so), Cdouble, (Ref{Float64}, ), dummy)
-    w = 2r1-1.0
+    cosθ = 2r1-1.0
     ϕ = 2π*r2
-    sdts = sqrt(1-w^2)
-    cos(ϕ)*sdts, sin(ϕ)*sdts, w
+    sinθ = sqrt(1-cosθ^2)
+    cos(ϕ)*sinθ, sin(ϕ)*sinθ, cosθ
 end
 
 
 function split_xrays(c::Control, splitfactor::Int)
-    part = particle(track)
-    generation, parent, interaction, xrftype = cause(track)
+    part = particle()
+    generation, parent, interaction, xrftype = cause()
     # Particle must be a 2nd generation XRF photon, not the result of splitting
     if (part == Photon &&
         splitfactor > 1 &&
         generation ==2 &&
         xrftype > 0 &&
         interaction != XSplit)
-        wt = weight(track)/splitfactor
-        ilbx = ilb(track)
+        wt = weight()/splitfactor
+        ilbx = ilb()
         ilbx[3] = Int32(Split)
-        unsafe_store!(track.ptr_wt, wt)
-        unsafe_store!(track.ptr_ilb, Int32(Split), 3)
-        x, y, z = location(track)
+        unsafe_store!(gtrack.ptr_wt, wt)
+        unsafe_store!(gtrack.ptr_ilb, Int32(Split), 3)
+        x, y, z = location()
         for i=2:splitfactor
             u, v, w = isotropic_random()
             ccall((:stores_, penelope_so), Cvoid, (Ref{Float64}, Ref{Float64}, Ref{Float64}, Ref{Float64},
             Ref{Float64}, Ref{Float64}, Ref{Float64}, Ref{Float64}, Ref{Int32}, Ptr{Int32}, Ref{Int32}),
-            energy(track), x, y, z, u, v, w, wt, Int32(Photon), ilbx, 0)
+            energy(), x, y, z, u, v, w, wt, Int32(Photon), ilbx, 0)
         end
     end
 end
@@ -605,18 +661,46 @@ clean_secstack() = ccall((:cleans_, penelope_so), Cvoid, ())
 start_medium() = ccall((:start_, penelope_so), Cvoid, ())
 
 "Determine body and material for a track, in PenGeom (wrap LOCATE)."
-locate_track() = ccall((:locate_, penelope_so), Cvoid, ())
+function locate_track()
+    ccall((:locate_, penelope_so), Cvoid, ())
+    unsafe_load(gtrack.ptr_ibody), unsafe_load(gtrack.ptr_mat)
+end
+function locate_track(x::Real, y::Real, z::Real)
+    unsafe_store!(gtrack.ptr_x, x)
+    unsafe_store!(gtrack.ptr_y, y)
+    unsafe_store!(gtrack.ptr_z, z)
+    locate_track()
+end
+locate_track(xyz) = locate_track(xyz...)
 
-function example(seed::Int)
+function example1(seed::Int)
     c = default_control(seed)
-    c.brem_split[1] = 4
-    c.xrf_split[1] = 4
+    c.brem_split[1] = 1
+    c.xrf_split[1] = 1
     setup_penelope(c)
     set_forcing_per_path(1, Electron, Brem, 5, 0.9, 1.0)
     set_forcing_per_path(1, Electron, InnerIon, 50, 0.9, 1.0)
     set_forcing(1, Photon, Compton, 10, 1e-3, 1.0)
     set_forcing(1, Photon, PhotoElecAbs, 10, 1e-3, 1.0)
     run_sim(c, 50)
+    c
+end
+
+function example(seed::Int, θ=0.0)
+    c = raven_control(seed, θ)
+    c.brem_split = ones(Int, 5)
+    c.xrf_split = ones(Int, 5)
+    c.brem_split[1] = 1
+    c.xrf_split[1] = 1
+    setup_penelope(c)
+    for body=1:3
+        set_forcing_per_path(body, Electron, Brem, 5, 0.9, 1.0)
+        set_forcing_per_path(body, Electron, InnerIon, 10, 0.9, 1.0)
+        set_forcing(body, Photon, Compton, 10, 1e-3, 1.0)
+        set_forcing(body, Photon, PhotoElecAbs, 10, 1e-3, 1.0)
+    end
+    # set_forcing_per_path(1, Electron, InnerIon, 50, 0.1, 1.0)
+    run_sim(c, 1000)
     c
 end
 
