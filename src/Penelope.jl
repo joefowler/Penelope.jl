@@ -1,11 +1,13 @@
 module Penelope
 
 include("hdf5.jl")
+include("physics.jl")
 
 using Printf
 
 export Particle,
-    Interaction
+    Interaction,
+    PhotonInteraction
 
 const penelope_so="deps/penelope.so"
 const MaxBodies=5000
