@@ -4,36 +4,56 @@ using PyPlot, HDF5, Penelope
 
 function plotwhere(wx::AbstractArray)
     clf()
-    names=["Fluorescence", "Low-E Brem", "High-E Brem"]
-    colors=["r", "purple", "b"]
+    names=["Ti fluorescence", "Si fluorescence"]
+    colors=["r", "orange", (0,3,2)][1:2]
+    for j=3:16
+        push!(names, "$(j-2) keV")
+        push!(colors, ColorMap("viridis")((j-3.0)/13.0))
+    end
+    names[3:end] .= ""
+
     x = -397.5:5:400
     z = 2.5:5:500
     for i = 1:2
         subplot(4,2,2i-1)
-        for j=1:3
-            plot(x, sum(wx[:,:,j], dims=2)[:,1], color=colors[j], label=names[j])
+        for j=1:16
+            pl = sum(wx[:,:,j], dims=2)[:,1]
+            plot(x, pl, color=colors[j], label=names[j])
+            # rtmeansqx = sqrt(sum(pl.*x.*x)/sum(pl))
+            # i==1 && @show j, rtmeansqx
         end
-        legend()
+        s = sum(wx[:,:,3:end], dims=(2,3))[:,1,1]
+        plot(x, s, color="k", label="All Brem")
+        i==1 && legend()
         xlabel("X (nm)")
     end
     semilogy()
 
     for i = 1:2
         subplot(4,2,2i)
-        for j=1:3
+        for j=1:16
             s = sum(wx[:,:,j], dims=1)[1,:]
-            plot(z[1:14], s[1:14], color=colors[j], label=names[j])
-            plot(z[15:end], s[15:end], color=colors[j])
+            plot(z, s, color=colors[j], label=names[j])
+            # frac = sum(s[1:14])/sum(s)
+            # i==1 && @show j,frac
+            # plot(z[1:14], s[1:14], color=colors[j], label=names[j])
+            # plot(z[15:end], s[15:end], color=colors[j])
         end
-        legend()
+        s = sum(wx[:,:,3:end], dims=(1,3))[1,:,1]
+        plot(z, s, color="k")
         xlabel("Z (nm)")
     end
     semilogy()
 
     subplot(4,1,3)
-    imshow(log10.(wx[:,1:14,1]'), extent=(-400, 400, 70, 0))
-    subplot(4,1,4)
-    imshow(log10.((wx[:,:,2]+wx[:,:,3])'), extent=(-400, 400, 500, 0))
+    imshow(log10.(wx[:,1:20,1]'), extent=(-400, 400, 100, 0), vmin=-8, vmax=-5.5) #; colorbar()
+    title("Titanium fluorescence")
+    subplot(4,2,7)
+    imshow(log10.((wx[:,:,2])'), extent=(-400, 400, 500, 0), vmin=-8, vmax=-5.5) #; colorbar()
+    title("Silicon fluorescence")
+    subplot(4,2,8)
+    imshow(log10.((sum(wx[:,:,3:end], dims=3)[:,:,1])'), vmin=-8, vmax=-6, extent=(-400, 400, 500, 0)) #; colorbar()
+    title("Bremsstrahlung emission")
 end
 
 plotwhere(filename::AbstractString) = plotwhere(Penelope.loadall(filename))

@@ -371,8 +371,8 @@ function softEloss(distance::Real, t::Track=gtrack)
 end
 
 
-sumwtr = zeros(Float64, 140, 100, 3)
-sumwtx = zeros(Float64, 160, 100, 3)
+sumwtr = zeros(Float64, 140, 100, 16)
+sumwtx = zeros(Float64, 160, 100, 16)
 espect = zeros(Float64, 150, 3)
 xspect = zeros(Float64, 1500, 5)
 totalcounts = 0
@@ -510,10 +510,13 @@ function run_sim(c::Control, Nelec::Integer)
                 map=0
                 if div(xrfcode, 1000000) == 22
                     map=1
-                elseif e≤4000
+                elseif div(xrfcode, 1000000) == 14
                     map=2
-                elseif e>4000
-                    map=3
+                elseif div(xrfcode, 1000000) == 0
+                    map=2+round(Int, div(e, 1000))
+                    if map > 16
+                        map = 16
+                    end
                 end
                 if map > 0
                     rbin = ceil(Int, ρ*2e6)
