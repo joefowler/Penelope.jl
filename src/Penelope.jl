@@ -1,8 +1,5 @@
 module Penelope
 
-include("hdf5.jl")
-include("physics.jl")
-
 using Printf
 
 export Particle,
@@ -48,6 +45,9 @@ end
     Split=9
 end
 const NInteractionTypes=8
+
+include("hdf5.jl")
+include("physics.jl")
 
 greet() = print("Hello World!")
 
