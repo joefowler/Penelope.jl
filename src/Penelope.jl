@@ -279,7 +279,8 @@ mutable struct Control
         new(e, bl, bd, s, gf, m, Nmat, 0, Int[], Int[], Int[])
     end
 end
-default_control(seed) = Control(15e3, [0, 0, 1], [0, 0, -1], Int32(seed), "epma1.geo", [MaterialParams()])
+default_control(seed) = Control(40e3, [0, 0, 1], [0, 0, -1], Int32(seed), "epma1.geo", [MaterialParams()])
+cobalt_control(seed) = Control(30e3, [0, 0, 1], [0, 0, -1], Int32(seed), "epma1.geo", [MaterialParams(1000, 1000, 1000, 0.1, 0.1, 1000, 1000, "Ni.mat")])
 raven_control(seed, θ=0.0) = Control(15e3, [-sin(θ), 0, cos(θ)], [sin(θ), 0, -cos(θ)], Int32(seed), "epmaRaven.geo", RavenParams())
 
 """
@@ -373,12 +374,14 @@ end
 
 sumwtr = zeros(Float64, 140, 100, 16)
 sumwtx = zeros(Float64, 160, 100, 16)
+sumwtz = zeros(Float64, 1000)
 espect = zeros(Float64, 150, 3)
 xspect = zeros(Float64, 1500, 5)
 totalcounts = 0
 function reset_counters()
     sumwtr[:,:,:].=0.0
     sumwtx[:,:,:].=0.0
+    sumwtz[:] .= 0.0
     espect[:,:].=0.0
     xspect[:,:].=0.0
     global totalcounts = 0
@@ -510,7 +513,7 @@ function run_sim(c::Control, Nelec::Integer)
                 map=0
                 if div(xrfcode, 1000000) == 22
                     map=1
-                elseif div(xrfcode, 1000000) == 14
+                elseif div(xrfcode, 1000000) > 1
                     map=2
                 elseif div(xrfcode, 1000000) == 0
                     map=2+round(Int, div(e, 1000))
@@ -547,7 +550,17 @@ function run_sim(c::Control, Nelec::Integer)
                     end
                 end
             end
-
+            if part == Photon && e > 0 && w>0
+                _, _, _, xrfcode = cause()
+                if div(xrfcode, 1000000) > 21
+                    z = emission_spot[3]
+                    zbin = ceil(Int, -z*2e6)
+                    if zbin<1; zbin=1; end
+                    if zbin ≤ 1000
+                        sumwtz[zbin] += wt
+                    end
+                end
+            end
             particles_to_do = number_secondaries()
         end
         # Done tracking all particles from this primary's secondary stack.
@@ -679,15 +692,15 @@ end
 locate_track(xyz) = locate_track(xyz...)
 
 function example1(seed::Int)
-    c = default_control(seed)
+    c = cobalt_control(seed)
+    c.brem_split = ones(Int, 1)
+    c.xrf_split = ones(Int, 1)
     c.brem_split[1] = 1
     c.xrf_split[1] = 1
     setup_penelope(c)
     set_forcing_per_path(1, Electron, Brem, 5, 0.9, 1.0)
     set_forcing_per_path(1, Electron, InnerIon, 50, 0.9, 1.0)
-    set_forcing(1, Photon, Compton, 10, 1e-3, 1.0)
-    set_forcing(1, Photon, PhotoElecAbs, 10, 1e-3, 1.0)
-    run_sim(c, 50)
+    run_sim(c, 1000)
     c
 end
 
