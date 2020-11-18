@@ -241,6 +241,15 @@ function RavenParams()
     [m1, m2, m3]
 end
 
+function nanodotParams(materialfile, cutoff=1500.0)
+    m1 = MaterialParams(cutoff, cutoff, cutoff, 0.1, 0.1, cutoff, cutoff, materialfile)
+    m2 = MaterialParams(cutoff, cutoff, cutoff, 0.1, 0.1, cutoff, cutoff, "SiN.mat")
+    m3 = MaterialParams(cutoff, cutoff, cutoff, 0.1, 0.1, cutoff, cutoff, "SiO2.mat")
+    m4 = MaterialParams(cutoff, cutoff, cutoff, 0.1, 0.1, cutoff, cutoff, "Cu.mat")
+    [m1, m2, m3, m4]
+end
+
+
 """
     fortranify(p)
 
@@ -280,8 +289,10 @@ mutable struct Control
     end
 end
 default_control(seed) = Control(40e3, [0, 0, 1], [0, 0, -1], Int32(seed), "epma1.geo", [MaterialParams()])
-cobalt_control(seed) = Control(30e3, [0, 0, 1], [0, 0, -1], Int32(seed), "epma1.geo", [MaterialParams(1000, 1000, 1000, 0.1, 0.1, 1000, 1000, "Ni.mat")])
+s2=sqrt(0.5)
+cobalt_control(seed) = Control(12.5e3, [-s2, 0, s2], [s2, 0, -s2], Int32(seed), "epma1.geo", [MaterialParams(4000, 4000, 4000, 0.1, 0.1, 1000, 1000, "W.mat")])
 raven_control(seed, θ=0.0) = Control(15e3, [-sin(θ), 0, cos(θ)], [sin(θ), 0, -cos(θ)], Int32(seed), "epmaRaven.geo", RavenParams())
+nanodot_control(seed, materialfile="Nb.mat") = Control(25e3, [0, 0, 1], [0, 0, -1], Int32(seed), "nanodot.geo", nanodotParams(materialfile))
 
 """
     setup_penelope(seed)
@@ -371,17 +382,15 @@ function softEloss(distance::Real, t::Track=gtrack)
     unsafe_store!(t.ptr_e, e)
 end
 
-
-sumwtr = zeros(Float64, 140, 100, 16)
-sumwtx = zeros(Float64, 160, 100, 16)
-sumwtz = zeros(Float64, 1000)
-espect = zeros(Float64, 150, 3)
-xspect = zeros(Float64, 1500, 5)
+nrbins, nxbins, nzbins = 300, 320, 700
+sumwtr = zeros(Float64, nrbins, nzbins, 16)
+sumwtx = zeros(Float64, nxbins, nzbins, 16)
+espect = zeros(Float64, 250, 3)
+xspect = zeros(Float64, 2500, 5)
 totalcounts = 0
 function reset_counters()
     sumwtr[:,:,:].=0.0
     sumwtx[:,:,:].=0.0
-    sumwtz[:] .= 0.0
     espect[:,:].=0.0
     xspect[:,:].=0.0
     global totalcounts = 0
@@ -397,6 +406,12 @@ function run_sim(c::Control, Nelec::Integer)
 
     for n=1:Nelec
         global totalcounts += 1
+        # Put xy position uniformly in a circle of radius R
+        R = 20e-7
+        ϕ = rand()*2π
+        r = R*sqrt(rand())
+        c.beam_location[1] = r*sin(ϕ)
+        c.beam_location[2] = r*cos(ϕ)
         initialize_track(c)
         locate_track()
         mat = material()
@@ -473,7 +488,7 @@ function run_sim(c::Control, Nelec::Integer)
                         if direction()[3]>0; ispect=2; end
                         if mat != 0; ispect=3; end
                         ebin = round(Int, e/100.0)
-                        if ebin≥1 && ebin≤150
+                        if ebin≥1 && ebin≤250
                             espect[ebin, ispect] += weight()
                         end
                     end
@@ -511,53 +526,43 @@ function run_sim(c::Control, Nelec::Integer)
                 gen, ppart, icol, xrfcode = cause()
 
                 map=0
-                if div(xrfcode, 1000000) == 22
-                    map=1
-                elseif div(xrfcode, 1000000) > 1
+                Zcode = div(xrfcode, 1000000)  # what Z emitted fluorescence
+                if Zcode in [7, 8, 14, 29]  # N, O, Si, Cu
                     map=2
-                elseif div(xrfcode, 1000000) == 0
-                    map=2+round(Int, div(e, 1000))
+                elseif Zcode > 1  # all other fluorescence (presumably the nanodot)
+                    map=1
+                elseif Zcode == 0  # Bremsstrahlung background
+                    map=2+round(Int, div(e, 2000))
                     if map > 16
                         map = 16
                     end
                 end
                 if map > 0
-                    rbin = ceil(Int, ρ*2e6)
-                    zbin = ceil(Int, -z*2e6)
+                    rbin = ceil(Int, ρ*1e6)
+                    zbin = ceil(Int, -z*1e6)
                     if rbin<1; rbin=1; end
                     if zbin<1; zbin=1; end
-                    if rbin ≤ 140 && zbin ≤ 100
+                    if rbin ≤ nrbins && zbin ≤ nzbins
                         sumwtr[rbin, zbin, map] += wt
                     end
-                    xbin = round(Int, emission_spot[1]*2e6+80.5)
-                    if xbin ≥ 1 && xbin ≤ 160 && zbin ≤ 100
+                    xbin = round(Int, emission_spot[1]*1e6+0.5+0.5*nxbins)
+                    if xbin ≥ 1 && xbin ≤ nxbins && zbin ≤ nzbins
                         sumwtx[xbin, zbin, map] += wt
                     end
                 end
                 ebin = round(Int, e/10.0)
-                if w<0 && ebin≥1 && ebin≤1500
+                if ebin≥1 && ebin≤2500
                     if xrfcode == 0
                         xspect[ebin, 1] += wt
-                        if z > -70e-7
+                        if z > -80e-7
                             xspect[ebin, 3] += wt
-                        elseif z > -2070e-7
+                        elseif z > -2080e-7
                             xspect[ebin, 4] += wt
                         else
                             xspect[ebin, 5] += wt
                         end
                     else
                         xspect[ebin, 2] += wt
-                    end
-                end
-            end
-            if part == Photon && e > 0 && w>0
-                _, _, _, xrfcode = cause()
-                if div(xrfcode, 1000000) > 21
-                    z = emission_spot[3]
-                    zbin = ceil(Int, -z*2e6)
-                    if zbin<1; zbin=1; end
-                    if zbin ≤ 1000
-                        sumwtz[zbin] += wt
                     end
                 end
             end
@@ -718,6 +723,22 @@ function example(seed::Int, θ=0.0)
         set_forcing(body, Photon, PhotoElecAbs, 10, 1e-3, 1.0)
     end
     # set_forcing_per_path(1, Electron, InnerIon, 50, 0.1, 1.0)
+    run_sim(c, 1000)
+    c
+end
+
+function nanodot_example(seed::Int, materialfile)
+    c = Penelope.nanodot_control(seed, materialfile)
+    c.brem_split = ones(Int, 5)
+    c.xrf_split = ones(Int, 5)
+    c.xrf_split[1] = 2  # so that ~1 is upgoing, ~1 down
+    setup_penelope(c)
+    for body=1:6
+        set_forcing_per_path(body, Electron, Brem, 5, 0.9, 1.0)
+        set_forcing_per_path(body, Electron, InnerIon, 5, 0.9, 1.0)
+        set_forcing(body, Photon, Compton, 10, 1e-3, 1.0)
+        set_forcing(body, Photon, PhotoElecAbs, 10, 1e-3, 1.0)
+    end
     run_sim(c, 1000)
     c
 end

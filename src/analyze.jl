@@ -4,16 +4,16 @@ using PyPlot, HDF5, Penelope
 
 function plotwhere(wx::AbstractArray)
     clf()
-    names=["Ti fluorescence", "Si fluorescence"]
+    names=["Dot fluorescence", "Other fluorescence"]
     colors=["r", "orange", (0,3,2)][1:2]
     for j=3:16
-        push!(names, "$(j-2) keV")
+        push!(names, "$(2*(j-2)) keV")
         push!(colors, ColorMap("viridis")((j-3.0)/13.0))
     end
     names[3:end] .= ""
 
-    x = -397.5:5:400
-    z = 2.5:5:500
+    x = -1600+5:10:1600
+    z = 5:10:7000
     for i = 1:2
         subplot(4,2,2i-1)
         for j=1:16
@@ -46,13 +46,13 @@ function plotwhere(wx::AbstractArray)
     semilogy()
 
     subplot(4,1,3)
-    imshow(log10.(wx[:,1:20,1]'), extent=(-400, 400, 100, 0), vmin=-8, vmax=-5.5) #; colorbar()
-    title("Titanium fluorescence")
+    imshow(log10.(wx[:,1:10,1]'), extent=(-1600, 1600, 100, 0), vmin=-8, vmax=-5.5) #; colorbar()
+    title("Nanodot fluorescence")
     subplot(4,2,7)
-    imshow(log10.((wx[:,:,2])'), extent=(-400, 400, 500, 0), vmin=-8, vmax=-5.5) #; colorbar()
-    title("Silicon fluorescence")
+    imshow(log10.((wx[:,:,2])'), extent=(-1600, 1600, 7000, 0), vmin=-8, vmax=-5.5) #; colorbar()
+    title("All other fluorescence")
     subplot(4,2,8)
-    imshow(log10.((sum(wx[:,:,3:end], dims=3)[:,:,1])'), vmin=-8, vmax=-6, extent=(-400, 400, 500, 0)) #; colorbar()
+    imshow(log10.((sum(wx[:,:,3:end], dims=3)[:,:,1])'), vmin=-8, vmax=-6, extent=(-1600, 1600, 7000, 0)) #; colorbar()
     title("Bremsstrahlung emission")
 end
 
