@@ -4,6 +4,8 @@ deps/*.so
 build.log
 /Manifest.toml
 
+plots/
+
 # Penelope "leftovers"
 fort.*
 geometry.rep
