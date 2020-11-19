@@ -9,3 +9,4 @@ plots/
 # Penelope "leftovers"
 fort.*
 geometry.rep
+.DS_Store

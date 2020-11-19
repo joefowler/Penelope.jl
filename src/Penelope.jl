@@ -397,8 +397,20 @@ function reset_counters()
     nothing
 end
 
+function read_eabs(n_bodies)
+    e = zeros(Float64, 3, n_bodies)
+    ptr = cglobal((:__penelope_mod_MOD_eabs, penelope_so), Float64)
+    for ipart = 1:3
+        for ibody = 1:n_bodies
+            idx = 3ibody+ipart-3
+            e[ipart, ibody] = unsafe_load(ptr, idx)
+        end
+    end
+    e
+end
+
 function run_sim(c::Control, Nelec::Integer)
-    eabs = 1000.0 .+ zeros(Float64, 3, 5)  # TODO: read this from penelope_mod
+    eabs = read_eabs(c.n_bodies)
     penergies = Array{Float64}(undef, 0)
     MAXTRACKSTEPS=10000
     alltracks = Array{Float64}(undef, MAXTRACKSTEPS, 7)
@@ -477,7 +489,7 @@ function run_sim(c::Control, Nelec::Integer)
                     alltracks[trackstep,7] = energy()
                     trackstep += 1
                 end
-                if ncross[] > 0  # Crossed from one material to another.
+                if ncross > 0  # Crossed from one material to another.
                     softEloss(actualdist[])
                     mat = material()
                     # Tally electron spectra
@@ -663,8 +675,10 @@ end
     take_one_step(maxdist)
 
 Take one forward step for the tracked particle, up to a maximum distance of `maxdist` or until crossing
-an interface from one body to anther (wrap STEP). Return (`actual`, `ncross`) where `actual` is the actual distance
-and `ncross` is the number of interface crossings (should be 0 or 1).
+an interface from one body to anther (wrap STEP). If the step crosses a void region, continue to the next
+non-void region. Return (`actual`, `ncross`) where `actual` is the actual distance
+and `ncross` is the number of interface crossings (can be 0, 1, or even more if crosses out of a material
+into void, and back into a material).
 
 Contains no interaction physics, but knows the geometrical limitations of the PenGeom setup.
 Use `compute_jump_length` before this to capture the interaction physics."""
@@ -729,11 +743,11 @@ end
 
 function nanodot_example(seed::Int, materialfile)
     c = Penelope.nanodot_control(seed, materialfile)
-    c.brem_split = ones(Int, 5)
-    c.xrf_split = ones(Int, 5)
-    c.xrf_split[1] = 2  # so that ~1 is upgoing, ~1 down
     setup_penelope(c)
-    for body=1:6
+    c.brem_split = ones(Int, c.n_bodies)
+    c.xrf_split = ones(Int, c.n_bodies)
+    c.xrf_split[1] = 2  # so that ~1 is upgoing, ~1 down
+    for body=1:c.n_bodies
         set_forcing_per_path(body, Electron, Brem, 5, 0.9, 1.0)
         set_forcing_per_path(body, Electron, InnerIon, 5, 0.9, 1.0)
         set_forcing(body, Photon, Compton, 10, 1e-3, 1.0)
