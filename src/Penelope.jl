@@ -241,12 +241,12 @@ function RavenParams()
     [m1, m2, m3]
 end
 
-function nanodotParams(materialfile, cutoff=1500.0)
+function nanodotParams(materialfile, cutoff=1600.0)
     m1 = MaterialParams(cutoff, cutoff, cutoff, 0.1, 0.1, cutoff, cutoff, materialfile)
     m2 = MaterialParams(cutoff, cutoff, cutoff, 0.1, 0.1, cutoff, cutoff, "SiN.mat")
     m3 = MaterialParams(cutoff, cutoff, cutoff, 0.1, 0.1, cutoff, cutoff, "SiO2.mat")
-    m4 = MaterialParams(cutoff, cutoff, cutoff, 0.1, 0.1, cutoff, cutoff, "Cu.mat")
-    [m1, m2, m3, m4]
+    # m4 = MaterialParams(cutoff, cutoff, cutoff, 0.1, 0.1, cutoff, cutoff, "Cu.mat")
+    [m1, m2, m3]
 end
 
 
@@ -757,4 +757,22 @@ function nanodot_example(seed::Int, materialfile)
     c
 end
 
+function all_nanodots(seed0::Int)
+    elements = ["Ti", "Ge", "Nb", "Pd", "Ag", "Sn", "Ir", "Pt", "Au", "SiN"]
+    for (i, element) in enumerate(elements)
+        materialfile = "$(element).mat"
+        outfile = "$(element).h5"
+        seed = seed0+i
+
+        # Run sims for 100 seconds
+        t0 = time()
+        c = nanodot_example(seed, materialfile)
+        while time()-t0 < 100
+            run_sim(c, 1000)
+        end
+        @show element, Penelope.totalcounts
+        saveall(outfile)
+    end
+    plot_nanodots(elements)
+end
 end # module
