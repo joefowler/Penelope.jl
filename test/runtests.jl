@@ -5,7 +5,11 @@ using Penelope
 
 @testset "load_so" begin
     @test Penelope.greet() == nothing
-    want = 3
-    unsafe_store!(Penelope.track.ptr_kpar, want)
-    @test want == unsafe_load(Penelope.track.ptr_kpar)
+    E = 20000.0
+    loc = [1,2,3]
+    dir = [0,0,-1]
+    Penelope.initialize_track(E, loc, dir)
+    @test E == Penelope.energy()
+    @test loc == Penelope.location()
+    @test dir == Penelope.direction()
 end
