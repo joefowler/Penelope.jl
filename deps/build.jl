@@ -1,6 +1,6 @@
 println("Building Penelope shared library from Fortran")
 
-penelope_location="../../../penelope/fsource"
+penelope_location="/Users/fowlerj/Software/penelope/fsource"
 f77="gfortran"
 
 run(`$(f77) -I$(penelope_location) -g -c -o wrappers.o wrappers.f`)
